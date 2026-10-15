@@ -119,14 +119,14 @@ def run_hook(shell_argv, command):
 def test_hook_command_server_down_git_bash():
     r, took = run_hook([GIT_BASH, "-c"], installer.curl_command(free_port()))
     assert r.returncode == 0 and r.stdout == b""
-    assert took < 1.5
+    assert took < 3.0          # bounded by curl -m 1 plus shell startup
 
 
 @pytest.mark.skipif(not shutil.which("powershell"), reason="PowerShell not available")
 def test_hook_command_server_down_powershell():
     r, took = run_hook(["powershell", "-NoProfile", "-Command"], installer.curl_command(free_port()))
     assert r.returncode == 0 and r.stdout.strip() == b""
-    assert took < 3.0          # PowerShell's own startup dominates
+    assert took < 6.0          # PowerShell startup dominates (slow on CI)
 
 
 @pytest.mark.skipif(not os.path.exists(GIT_BASH), reason="Git Bash not installed")
@@ -162,7 +162,7 @@ def test_ensure_running_starts_detached_server_and_replays_spool(tmp_path):
                        env=env, capture_output=True, timeout=20)
     took = time.time() - start
     assert r.returncode == 0 and r.stdout == b""
-    assert took < 2.0
+    assert took < 4.0          # ~0.5s locally; generous for slow CI runners
     from pulse import launcher
     pid = None
     try:

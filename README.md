@@ -1,6 +1,11 @@
 # Claude Pulse
 
-A small always-on-top window on the right edge of your screen that shows what Claude Code is
+[![tests](https://github.com/YashwardhanV/claude-pulse/actions/workflows/tests.yml/badge.svg)](https://github.com/YashwardhanV/claude-pulse/actions/workflows/tests.yml)
+![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078d4)
+![python](https://img.shields.io/badge/python-3.11%2B-3776ab)
+[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+**A live heartbeat monitor for [Claude Code](https://code.claude.com).** A small always-on-top window on the right edge of your screen that shows what Claude Code is
 doing, so you don't have to switch back to the terminal to check on it.
 
 * **A beating heart and a scrolling ECG strip.** The heart's rhythm follows Claude Code's state.
@@ -21,10 +26,18 @@ Claude Code --hook (stdin JSON)--> curl.exe (0.3s connect timeout, always exit 0
             '- SSE /stream --> pywebview window (web/index.html, canvas)
 ```
 
+<p align="center">
+  <img src="docs/screenshots/blocked-and-error.png" width="240" alt="One session blocked on a permission prompt (amber heart, NEEDS YOU) moved to the top, another flashing red after a failed Bash call">
+  <img src="docs/screenshots/context-pressure.png" width="240" alt="Context at 93%: the heart is red-hot with veins and the hint to /compact or /clear">
+  <img src="docs/screenshots/working-and-done.png" width="240" alt="One session working with labelled tool spikes, another done with a calm green heart">
+</p>
+<p align="center"><sub>Blocked + error &nbsp;·&nbsp; context nearly full &nbsp;·&nbsp; working + done (all from <code>python pulse.py demo</code>)</sub></p>
+
 ## Quick start
 
 ```powershell
-cd E:\Pulse\claude-pulse
+git clone https://github.com/YashwardhanV/claude-pulse.git
+cd claude-pulse
 python pulse.py demo        # see every state with two fake sessions; no Claude needed
 python pulse.py install     # merge the hooks into ~/.claude/settings.json (backup first)
 # restart Claude Code: the window appears on its own at the next session start
@@ -221,7 +234,12 @@ pulse/installer.py    settings.json merge/strip
 pulse/demo.py         demo script
 web/index.html        canvas heart + ECG + cards (no frameworks)
 docs/HOOKS_NOTES.md   what was verified against the official docs
+docs/screenshots/     README images
 tests/                pytest suite (state machine, transcript, notifier, installer, real hook commands)
 ```
 
-Run the tests with `python -m pytest -q`.
+Run the tests with `python -m pytest -q`. CI runs them on Windows with Python 3.11–3.13.
+
+## License
+
+[MIT](LICENSE)
