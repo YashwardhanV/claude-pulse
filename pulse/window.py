@@ -1,9 +1,11 @@
 """pywebview window: frameless, always on top, docked to the right edge."""
 import ctypes
+import ctypes.wintypes
 import logging
 import os
 import sys
 import threading
+import time
 
 from . import config as config_mod
 
@@ -25,9 +27,6 @@ class Api:
 
     def hide(self):
         self._ctl.hide()
-
-    def hover(self, on):
-        self._ctl.hover(bool(on))
 
 
 class WindowController:
@@ -61,6 +60,8 @@ class WindowController:
             background_color="#0b0d12", min_size=(WIDTH, 60), focus=False)
         self.window.events.moved += self._on_moved
         self.window.events.shown += self._on_shown
+        self.window.events.closed += self._on_closed
+        self._closed = False
         return self.window
 
     def run(self):
@@ -72,6 +73,29 @@ class WindowController:
 
     def _on_shown(self):
         threading.Timer(0.3, lambda: self._set_alpha(self._opacity())).start()
+        if sys.platform == "win32":
+            threading.Thread(target=self._hover_loop, name="hover", daemon=True).start()
+
+    def _on_closed(self):
+        self._closed = True
+
+    def _hover_loop(self):
+        """Fade the window while the cursor is over it, so you can see what's behind."""
+        user32 = ctypes.windll.user32
+        pt, rect = ctypes.wintypes.POINT(), ctypes.wintypes.RECT()
+        inside_before = False
+        while not self._closed:
+            time.sleep(0.15)
+            hwnd = self._find_hwnd()
+            if not hwnd or self.hidden:
+                inside_before = False
+                continue
+            user32.GetCursorPos(ctypes.byref(pt))
+            user32.GetWindowRect(ctypes.c_void_p(hwnd), ctypes.byref(rect))
+            inside = rect.left <= pt.x < rect.right and rect.top <= pt.y < rect.bottom
+            if inside != inside_before:
+                inside_before = inside
+                self.hover(inside)
 
     # -- page callbacks ----------------------------------------------------------------
     def fit(self, height):

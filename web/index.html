@@ -562,8 +562,7 @@ document.getElementById("close").addEventListener("click", e => {
   e.stopPropagation();
   if (api() && api().hide) api().hide();
 });
-document.documentElement.addEventListener("mouseenter", () => api() && api().hover && api().hover(true));
-document.documentElement.addEventListener("mouseleave", () => api() && api().hover && api().hover(false));
+// Hover-to-fade is done natively (window.py polls the cursor); DOM mouseleave is unreliable in WebView2.
 window.addEventListener("pywebviewready", () => { lastFitH = 0; scheduleFit(); });
 
 // ---------- frame loop: 30fps, 5fps when everything is calm ---------------------------------

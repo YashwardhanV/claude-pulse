@@ -276,6 +276,13 @@ def test_context_above_window_assumes_1m(env):
     assert s.context_window == 1_000_000 and s.context_pct == 51.5
 
 
+def test_1m_model_id_sets_window(env):
+    reg, *_ = env
+    reg.handle(ev("SessionStart", model="claude-opus-5-5[1m]"))
+    reg.set_context("s1", 190000)
+    assert reg.get("s1").context_pct == 19.0
+
+
 def test_session_end_then_removed_after_10s(env):
     reg, clock, _, _ = env
     reg.handle(ev("SessionStart"))

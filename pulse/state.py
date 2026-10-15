@@ -58,6 +58,7 @@ class Session:
         self.context_tokens = None
         self.context_window = None
         self.context_pct = None
+        self.window_hint = None        # 1M if the model id says so
         self.tool_count = 0
 
     def display_state(self, now):
@@ -161,6 +162,8 @@ class Registry:
 
     def _on_SessionStart(self, s, p, now):
         source = p.get("source") or "startup"
+        if "[1m]" in str(p.get("model") or "").lower():
+            s.window_hint = 1_000_000
         if source == "clear":
             self._set_base(s, IDLE, now)
             s.task_started = None
@@ -273,7 +276,7 @@ class Registry:
             s = self.sessions.get(sid)
             if not s or tokens is None:
                 return
-            window = int(self.cfg.get("context_window_tokens", 200000))
+            window = s.window_hint or int(self.cfg.get("context_window_tokens", 200000))
             if tokens > window:
                 window = max(window, 1_000_000)   # extended-context model
             s.context_tokens = int(tokens)

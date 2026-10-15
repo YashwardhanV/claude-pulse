@@ -175,6 +175,7 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             payload = json.loads(raw.decode("utf-8", "replace"))
         except ValueError:
+            log.warning("ignored a non-JSON event body (%d bytes)", len(raw))
             return
         del raw
         try:
