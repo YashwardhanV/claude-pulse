@@ -54,6 +54,8 @@ class WindowController:
         x, y = wcfg.get("x"), wcfg.get("y")
         if x is None or y is None or not self._on_screen(x, y):
             x, y = self.screen[0] - WIDTH - 10, 70
+            if not self.remember:        # demo: sit beside a real Pulse window, not on top of it
+                x -= WIDTH + 10
         self.window = webview.create_window(
             self.title, self.url, js_api=Api(self), width=WIDTH, height=self._height,
             x=int(x), y=int(y), frameless=True, on_top=True, resizable=False, easy_drag=False,
