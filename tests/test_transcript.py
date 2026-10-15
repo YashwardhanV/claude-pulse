@@ -33,8 +33,8 @@ def test_usage_tokens_matches_status_line_formula():
 
 
 def test_parse_assistant():
-    assert parse_assistant(assistant(["thinking"], USAGE)) == (65674, True, False)
-    assert parse_assistant(assistant(["tool_use"])) == (None, False, True)
+    assert parse_assistant(assistant(["thinking"], USAGE)) == (65674, True, False, None)
+    assert parse_assistant(assistant(["tool_use"])) == (None, False, True, None)
     assert parse_assistant(assistant(["thinking"], USAGE, sidechain=True)) is None
     assert parse_assistant({"type": "user", "message": {}}) is None
 

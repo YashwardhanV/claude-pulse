@@ -44,8 +44,8 @@ def health(port, timeout=0.5):
         return None
 
 
-def post_event(port, body, timeout=0.5):
-    if not port_open(port):
+def post_event(port, body, timeout=0.5, check=True):
+    if check and not port_open(port):
         return False
     try:
         req = urllib.request.Request("http://127.0.0.1:%d/event" % int(port), data=body,
@@ -123,14 +123,13 @@ def ensure_running(body=b""):
     """SessionStart hook: forward the payload, starting the server if it isn't up."""
     cfg = config_mod.load()
     port = int(cfg.get("port", 7777))
-    if body and post_event(port, body):
+    up = port_open(port)     # probe once: a refused connect on Windows is not instant
+    if up and body and post_event(port, body, check=False):
         return "forwarded"
-    if health(port):
-        return "running"
     if body:
         spool(body)          # the server replays this when it comes up
-    if port_open(port):
-        return "port %d busy (not Claude Pulse)" % port
+    if up:
+        return "running" if health(port) else "port %d busy (not Claude Pulse)" % port
     if acquire_start_lock():
         spawn_server()
         return "started"

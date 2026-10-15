@@ -271,18 +271,26 @@ class Registry:
             self._queue("state", None)
         self._flush()
 
-    def set_context(self, sid, tokens):
+    def set_context(self, sid, tokens, model=None):
+        learned = None
         with self.lock:
             s = self.sessions.get(sid)
             if not s or tokens is None:
                 return
-            window = s.window_hint or int(self.cfg.get("context_window_tokens", 200000))
+            overrides = self.cfg.get("context_window_overrides") or {}
+            window = (s.window_hint or (model and overrides.get(model))
+                      or int(self.cfg.get("context_window_tokens", 200000)))
             if tokens > window:
                 window = max(window, 1_000_000)   # extended-context model
+                if model and overrides.get(model) != window:
+                    learned = (model, window)
+                    self.cfg.setdefault("context_window_overrides", {})[model] = window
             s.context_tokens = int(tokens)
             s.context_window = window
             s.context_pct = round(100.0 * tokens / window, 1)
             self._queue("state", None)
+            if learned:
+                self._queue("learn_window", learned)
         self._flush()
 
     # ---- timers ----------------------------------------------------------------------

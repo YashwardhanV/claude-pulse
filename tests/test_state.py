@@ -276,6 +276,18 @@ def test_context_above_window_assumes_1m(env):
     assert s.context_window == 1_000_000 and s.context_pct == 51.5
 
 
+def test_window_is_learned_per_model(env):
+    reg, _, emitted, _ = env
+    reg.handle(ev("SessionStart", sid="big"))
+    reg.handle(ev("SessionStart", sid="new"))
+    reg.set_context("big", 250000, model="claude-x")
+    assert ("learn_window", ("claude-x", 1_000_000)) in emitted
+    reg.set_context("new", 190000, model="claude-x")      # below 200k, but same model
+    assert reg.get("new").context_pct == 19.0
+    reg.set_context("new", 190000, model="claude-other")
+    assert reg.get("new").context_pct == 95.0
+
+
 def test_1m_model_id_sets_window(env):
     reg, *_ = env
     reg.handle(ev("SessionStart", model="claude-opus-5-5[1m]"))

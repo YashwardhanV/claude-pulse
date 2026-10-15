@@ -101,7 +101,8 @@ def cmd_serve(args):
     try:
         # Blocks until the window is closed (× only hides it). Closing it for real, e.g.
         # Alt+F4, stops the server; the next SessionStart hook starts a fresh one.
-        _run_window_or_wait(app, port, cfg, args.headless)
+        headless = args.headless or os.environ.get("PULSE_HEADLESS") == "1"
+        _run_window_or_wait(app, port, cfg, headless)
         log.info("window closed; exiting")
     finally:
         app.stop()

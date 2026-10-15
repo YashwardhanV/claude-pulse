@@ -63,6 +63,13 @@ class PulseApp:
     def emit(self, kind, data):
         if kind == "state":
             self.hub.broadcast("state", self.registry.snapshot())
+        elif kind == "learn_window":
+            model, window = data
+            log.info("learned: %s has a %d-token context window", model, window)
+            try:
+                config_mod.update(lambda c: c.setdefault("context_window_overrides", {}).update({model: window}))
+            except Exception:
+                log.exception("saving context_window_overrides failed")
         else:
             self.hub.broadcast(kind, data)
 

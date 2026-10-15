@@ -30,7 +30,7 @@ def parse_assistant(entry):
         return None
     kinds = {c.get("type") for c in msg.get("content") or [] if isinstance(c, dict)}
     return (usage_tokens(msg.get("usage")), "thinking" in kinds or "redacted_thinking" in kinds,
-            bool(kinds & {"text", "tool_use"}))
+            bool(kinds & {"text", "tool_use"}), msg.get("model"))
 
 
 class FileTail:
@@ -119,16 +119,16 @@ class TranscriptWatcher:
     def _process(self, sid, tail):
         initial = tail.first
         tail.first = False
-        tokens, last = None, None
+        tokens, model, last = None, None, None
         for entry in tail.read_lines():
             info = parse_assistant(entry)
             if info is None:
                 continue
             if info[0]:
-                tokens = info[0]
+                tokens, model = info[0], info[3]
             last = info
         if tokens:
-            self.registry.set_context(sid, tokens)
+            self.registry.set_context(sid, tokens, model)
         # Latest assistant block is a thinking block with nothing after it: still reasoning.
         if not initial and last and last[1] and not last[2]:
             self.registry.transcript_thinking(sid)
