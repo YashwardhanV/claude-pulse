@@ -1,0 +1,588 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Pulse</title>
+<style>
+  :root {
+    --bg: #0b0d12;
+    --card: #141821;
+    --card-hi: #181d28;
+    --line: #242a38;
+    --text: #d9dee8;
+    --muted: #7c8597;
+    --amber: #f5a524;
+    --red: #ff3b3b;
+    --green: #5cc98b;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font: 11px/1.35 "Segoe UI", system-ui, sans-serif;
+    overflow: hidden; user-select: none; -webkit-user-select: none;
+  }
+  #app { padding: 0 6px 6px; }
+  #bar {
+    display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 2px;
+    color: var(--muted); font-size: 10px; letter-spacing: .08em; cursor: move;
+  }
+  #bar .logo { color: #e5484d; font-size: 11px; }
+  #bar .name { font-weight: 600; }
+  #bar .count { margin-left: auto; letter-spacing: 0; }
+  #bar button {
+    background: none; border: 0; color: var(--muted); font-size: 15px; line-height: 1;
+    width: 20px; height: 20px; border-radius: 5px; cursor: pointer; padding: 0;
+  }
+  #bar button:hover { background: #262c3a; color: var(--text); }
+  #conn { width: 6px; height: 6px; border-radius: 50%; background: #444; }
+  #conn.on { background: var(--green); }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    margin-top: 6px; overflow: hidden;
+    transition: opacity .6s ease, border-color .4s ease;
+  }
+  .card.blocked { animation: amberpulse 1.6s ease-in-out infinite; }
+  @keyframes amberpulse {
+    0%, 100% { border-color: rgba(245,165,36,.35); box-shadow: 0 0 0 0 rgba(245,165,36,0); }
+    50% { border-color: rgba(245,165,36,1); box-shadow: 0 0 10px 0 rgba(245,165,36,.35); }
+  }
+  .card.error { border-color: rgba(255,59,59,.7); }
+  .card.ended { opacity: 0; transition: opacity 9s linear; }
+  .card.leaving { opacity: 0; }
+  .head {
+    display: flex; align-items: center; gap: 6px; padding: 6px 9px 0; cursor: move;
+  }
+  .title { font-weight: 600; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .badge {
+    margin-left: auto; font-size: 9px; letter-spacing: .06em; text-transform: uppercase;
+    padding: 1px 6px; border-radius: 99px; background: #222836; color: var(--muted); flex: none;
+  }
+  .badge.blocked { background: rgba(245,165,36,.18); color: var(--amber); }
+  .badge.error { background: rgba(255,59,59,.18); color: #ff6b6b; }
+  .badge.done { background: rgba(92,201,139,.15); color: var(--green); }
+  .badge.thinking { background: rgba(125,211,252,.13); color: #7dd3fc; }
+  .badge.working { background: rgba(229,72,77,.15); color: #ff7b7f; }
+  .body { padding: 2px 6px 7px; cursor: pointer; }
+  .row { display: flex; align-items: center; justify-content: center; gap: 4px; }
+  canvas.heart { width: 132px; height: 90px; display: block; margin-bottom: -4px; }
+  .bp { display: flex; flex-direction: column; align-items: center; gap: 3px; width: 32px; }
+  .bptube {
+    width: 6px; height: 56px; border-radius: 3px; background: #0c0f15;
+    border: 1px solid #262c39; position: relative; overflow: hidden;
+  }
+  .bpfill {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 0%;
+    background: var(--green); transition: height .8s ease, background-color .8s ease;
+  }
+  .bpfill.hot { animation: hot 0.9s ease-in-out infinite; }
+  @keyframes hot { 50% { filter: brightness(1.6); } }
+  .bplabel { font-size: 9px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  canvas.ecg { width: 100%; height: 44px; display: block; border-radius: 6px; background: #0a0d12; }
+  .status {
+    margin-top: 5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-size: 11px;
+  }
+  .status .st { font-weight: 600; }
+  .hint { display: none; margin-top: 3px; color: #ff8a6b; font-size: 10px; }
+  .hint.show { display: block; }
+  .events { display: none; margin-top: 6px; border-top: 1px solid var(--line); padding-top: 4px; }
+  .card.open .events { display: block; }
+  .ev { display: flex; gap: 6px; font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; }
+  .ev .t { font-variant-numeric: tabular-nums; color: #5a6274; flex: none; }
+  .ev .x { overflow: hidden; text-overflow: ellipsis; color: #aab2c2; }
+
+  body.compact canvas.heart { width: 46px; height: 38px; }
+  body.compact .ecg, body.compact .hint { display: none !important; }
+  body.compact .row { justify-content: flex-start; }
+  body.compact .body { display: flex; align-items: center; gap: 4px; padding: 0 6px 4px; }
+  body.compact .bp { width: auto; flex-direction: row; }
+  body.compact .bptube { width: 26px; height: 5px; }
+  body.compact .bpfill { top: 0; height: 100% !important; right: auto; width: var(--pct, 0%); transition: width .8s ease; }
+  body.compact .status { margin-top: 0; flex: 1; min-width: 0; font-size: 10px; }
+  body.compact .head { padding-top: 4px; }
+
+  .empty { padding: 14px 10px; text-align: center; color: var(--muted); }
+  .empty b { color: var(--text); font-weight: 600; display: block; margin-bottom: 3px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="bar" class="pywebview-drag-region">
+    <span class="logo pywebview-drag-region">&#9829;</span>
+    <span class="name pywebview-drag-region">CLAUDE PULSE</span>
+    <span id="conn" title="connection to pulse server"></span>
+    <span class="count pywebview-drag-region" id="count"></span>
+    <button id="close" title="Hide (reappears on the next event)">&times;</button>
+  </div>
+  <div id="cards"></div>
+  <div class="card empty" id="empty"><b>No active sessions</b>Start Claude Code in a terminal.</div>
+</div>
+<script>
+"use strict";
+
+// ---------- look & feel per state ---------------------------------------------------------
+const STATES = {
+  idle:     { bpm: 40,  heart: [143, 59, 64],  glow: .22, ecg: [63, 143, 102],  amp: .3 },
+  working:  { bpm: 75,  heart: [229, 72, 77],  glow: .5,  ecg: [61, 220, 132],  amp: 1 },
+  thinking: { bpm: 130, heart: [255, 96, 102], glow: .8,  ecg: [125, 211, 252], amp: .55 },
+  blocked:  { bpm: 76,  heart: [245, 165, 36], glow: .9,  ecg: [245, 165, 36],  amp: 0 },
+  error:    { bpm: 96,  heart: [255, 46, 58],  glow: .9,  ecg: [255, 59, 59],   amp: 1 },
+  done:     { bpm: 50,  heart: [104, 196, 138], glow: .45, ecg: [92, 201, 139],  amp: .7 },
+  ended:    { bpm: 30,  heart: [90, 90, 96],   glow: .1,  ecg: [70, 70, 76],    amp: .15 },
+};
+const RED = [255, 59, 59];
+const ECG_SPEED = 46;        // px per second
+const ECG_DELAY = 0.28;      // render this far behind "now" so P waves can lead the R peak
+const CALM = new Set(["idle", "done", "ended"]);
+
+const g = (x, w) => Math.exp(-(x / w) * (x / w));
+const lerp = (a, b, k) => a + (b - a) * k;
+const mix = (c1, c2, k) => [lerp(c1[0], c2[0], k), lerp(c1[1], c2[1], k), lerp(c1[2], c2[2], k)];
+const rgb = (c, a = 1) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
+
+function pqrst(dt) {
+  return 0.12 * g(dt + 0.16, 0.03) - 0.12 * g(dt + 0.03, 0.01) + 1.0 * g(dt, 0.012)
+       - 0.28 * g(dt - 0.03, 0.012) + 0.25 * g(dt - 0.24, 0.05);
+}
+
+function heartPath(ctx, s) {
+  ctx.beginPath();
+  ctx.moveTo(0, s * 0.92);
+  ctx.bezierCurveTo(-s * 0.18, s * 0.72, -s * 1.02, s * 0.28, -s * 1.0, -s * 0.28);
+  ctx.bezierCurveTo(-s * 0.98, -s * 0.82, -s * 0.42, -s * 1.02, 0, -s * 0.56);
+  ctx.bezierCurveTo(s * 0.42, -s * 1.02, s * 0.98, -s * 0.82, s * 1.0, -s * 0.28);
+  ctx.bezierCurveTo(s * 1.02, s * 0.28, s * 0.18, s * 0.72, 0, s * 0.92);
+  ctx.closePath();
+}
+
+function fitCanvas(cv) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth, h = cv.clientHeight;
+  if (!w || !h) return null;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  }
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w, h };
+}
+
+// ---------- one animated session ----------------------------------------------------------
+class Vis {
+  constructor(id) {
+    this.id = id;
+    this.el = document.createElement("div");
+    this.el.className = "card";
+    this.el.innerHTML = `
+      <div class="head pywebview-drag-region"><span class="title pywebview-drag-region"></span><span class="badge"></span></div>
+      <div class="body">
+        <div class="row">
+          <canvas class="heart"></canvas>
+          <div class="bp" title="context window used"><div class="bptube"><div class="bpfill"></div></div><span class="bplabel">—</span></div>
+        </div>
+        <canvas class="ecg"></canvas>
+        <div class="status"></div>
+        <div class="hint">context nearly full — consider /compact or /clear</div>
+        <div class="events"></div>
+      </div>`;
+    this.$ = sel => this.el.querySelector(sel);
+    this.heartCv = this.$("canvas.heart");
+    this.ecgCv = this.$("canvas.ecg");
+    this.$(".body").addEventListener("click", () => { this.el.classList.toggle("open"); scheduleFit(); });
+
+    this.state = "idle";
+    this.data = null;
+    this.bpm = 40;
+    this.color = STATES.idle.heart.slice();
+    this.glow = .2;
+    this.nextBeat = 0;
+    this.beatN = 0;
+    this.pulses = [];       // {t, a, kind}
+    this.ecgEvents = [];    // {t, kind, amp, label}
+    this.breath = null;
+    this.flash = 0;
+    this.pct = null;
+    // ECG ring buffer, one sample per CSS px column
+    this.N = 400;
+    this.ys = new Float32Array(this.N);
+    this.cs = new Array(this.N).fill(STATES.idle.ecg);
+    this.head = 0;           // absolute column count
+    this.colAcc = 0;
+    this.labels = [];        // {col, text, color}
+    this.lastPulseAt = 0;
+  }
+
+  update(d) {
+    this.data = d;
+    const prev = this.state;
+    this.state = d.state;
+    this.pct = d.context_pct;
+    this.el.classList.toggle("blocked", d.state === "blocked");
+    this.el.classList.toggle("error", d.state === "error");
+    if (d.state === "ended" && prev !== "ended") this.el.classList.add("ended");
+    this.$(".title").textContent = d.title;
+    this.$(".title").title = d.project;
+    const badge = this.$(".badge");
+    badge.textContent = d.state === "blocked" ? "needs you" : d.state;
+    badge.className = "badge " + d.state;
+    const [st, ...rest] = d.status.split(" · ");
+    let detail = rest.join(" · ");
+    if (d.state === "blocked" && d.blocked_for > 2) detail += ` · ${fmtDur(d.blocked_for)}`;
+    const status = this.$(".status");
+    status.innerHTML = "";
+    const b = document.createElement("span"); b.className = "st"; b.textContent = st;
+    status.append(b, document.createTextNode(detail ? " · " + detail : ""));
+    status.title = d.status;
+    status.style.color = d.state === "blocked" ? "var(--amber)" : d.state === "error" ? "#ff6b6b" : "";
+
+    const fill = this.$(".bpfill"), label = this.$(".bplabel");
+    if (d.context_pct == null) {
+      fill.style.height = "0%"; this.el.style.setProperty("--pct", "0%"); label.textContent = "—";
+      this.$(".bp").title = "context window used: no reading yet";
+    } else {
+      const p = Math.max(0, Math.min(100, d.context_pct));
+      fill.style.height = p + "%";
+      this.el.style.setProperty("--pct", p + "%");
+      fill.style.backgroundColor = p > 90 ? "#ff3b3b" : p > 75 ? "#ff8a3d" : p > 50 ? "#f5c542" : "#3ddc84";
+      fill.classList.toggle("hot", p > 90);
+      label.textContent = Math.round(p) + "%";
+      this.$(".bp").title = `context: ${d.context_tokens.toLocaleString()} / ${d.context_window.toLocaleString()} tokens`;
+    }
+    this.$(".hint").classList.toggle("show", d.context_pct != null && d.context_pct > 90);
+
+    const evs = this.$(".events");
+    evs.innerHTML = "";
+    for (const [ms, text] of d.events.slice().reverse()) {
+      const row = document.createElement("div"); row.className = "ev";
+      const t = document.createElement("span"); t.className = "t"; t.textContent = fmtTime(ms);
+      const x = document.createElement("span"); x.className = "x"; x.textContent = text;
+      row.append(t, x); evs.append(row);
+    }
+  }
+
+  pulse(kind, label, t) {
+    this.lastPulseAt = t;
+    if (kind === "tool") {
+      this.pulses.push({ t, a: .75 });
+      this.ecgEvents.push({ t, kind: "tool", label });
+    } else if (kind === "error") {
+      this.flash = 1;
+      this.ecgEvents.push({ t, kind: "err", label });
+    } else if (kind === "flutter") {
+      for (let i = 0; i < 3; i++) this.pulses.push({ t: t + i * .09, a: .28 });
+      this.ecgEvents.push({ t, kind: "flutter" });
+    } else if (kind === "breath") {
+      this.breath = t;
+    }
+  }
+
+  targetBpm() {
+    let bpm = STATES[this.state].bpm;
+    if (this.pct != null && this.pct > 75 && this.state !== "blocked") bpm *= 1.08;
+    return bpm;
+  }
+
+  beat(t) {
+    const st = this.state;
+    this.beatN++;
+    let interval = 60 / this.bpm;
+    if (st === "error") interval *= 0.45 + Math.random() * 1.2;      // arrhythmia
+    this.nextBeat = t + interval;
+    if (st === "blocked" && this.beatN % 3 === 0) return;           // beat-beat-pause
+    if (this.breath && t - this.breath < 2.4) return;
+    this.pulses.push({ t, a: st === "idle" ? .55 : st === "ended" ? .3 : 1 });
+    const amp = STATES[st].amp * (st === "error" ? .6 + Math.random() * .8 : 1);
+    if (amp > 0) this.ecgEvents.push({ t, kind: "qrs", amp });
+  }
+
+  sample(tc) {
+    let y = 0, err = false;
+    for (const e of this.ecgEvents) {
+      const dt = tc - e.t;
+      if (dt < -0.3 || dt > 0.6) continue;
+      if (e.kind === "qrs") y += pqrst(dt) * e.amp;
+      else if (e.kind === "tool") y += pqrst(dt) * .7 + 1.5 * g(dt - .004, .011) - .45 * g(dt - .03, .01);
+      else if (e.kind === "err") {
+        for (let k = 0; k < 7; k++) y += (k % 2 ? -1 : 1) * 1.25 * (1 - k / 8) * g(dt - k * .028, .008);
+        if (dt > -0.03 && dt < 0.25) err = true;
+      } else if (e.kind === "flutter" && dt > 0 && dt < .35) y += .3 * Math.sin(dt * 70) * Math.exp(-dt * 9);
+    }
+    const st = this.state;
+    if (st === "thinking") y += .09 * Math.sin(tc * 2 * Math.PI * 7.5) + .05 * Math.sin(tc * 2 * Math.PI * 12.3);
+    else if (st === "idle") y += .035 * Math.sin(tc * 2 * Math.PI * 1.3);
+    return [y, err];
+  }
+
+  step(t, dt) {
+    // Smooth BPM changes, beats, color.
+    this.bpm = lerp(this.bpm, this.targetBpm(), Math.min(1, dt * 1.2));
+    if (!this.nextBeat) this.nextBeat = t + Math.random() * .5;
+    if (t >= this.nextBeat) this.beat(t);
+    const st = STATES[this.state];
+    let target = st.heart;
+    const p = this.pct;
+    const reddish = this.state === "working" || this.state === "thinking" || this.state === "idle";
+    if (p != null && reddish) {
+      if (p > 90) target = [255, 70, 30];
+      else if (p > 75) target = mix(target, [150, 20, 32], .5);
+      else if (p > 50) target = mix(target, [170, 28, 40], .3);
+    }
+    this.color = mix(this.color, target, Math.min(1, dt * 3));
+    this.glow = lerp(this.glow, st.glow + (p > 90 ? .35 : 0), Math.min(1, dt * 3));
+    this.flash = Math.max(0, this.flash - dt * 1.2);
+    this.pulses = this.pulses.filter(q => t - q.t < .8);
+    this.ecgEvents = this.ecgEvents.filter(e => t - ECG_DELAY - e.t < .8);
+    if (this.breath && t - this.breath > 2.6) this.breath = null;
+
+    // Advance the ECG strip.
+    this.colAcc += dt * ECG_SPEED;
+    let n = Math.floor(this.colAcc);
+    this.colAcc -= n;
+    if (n > this.N) n = this.N;
+    for (let i = 0; i < n; i++) {
+      const tc = t - ECG_DELAY - (n - 1 - i) / ECG_SPEED;
+      const [y, err] = this.sample(tc);
+      const idx = this.head % this.N;
+      this.ys[idx] = y;
+      this.cs[idx] = err ? RED : st.ecg;
+      for (const e of this.ecgEvents) {
+        if (!e.labeled && (e.kind === "tool" || e.kind === "err") && tc >= e.t) {
+          e.labeled = true;
+          if (e.label) this.labels.push({ col: this.head, text: e.label, color: e.kind === "err" ? RED : [235, 240, 248] });
+        }
+      }
+      this.head++;
+    }
+    this.labels = this.labels.filter(l => this.head - l.col < this.N);
+  }
+
+  heartScale(t) {
+    let v = 0;
+    for (const q of this.pulses) {
+      const dt = t - q.t;
+      if (dt < 0) continue;
+      v += q.a * (g(dt - .06, .055) + .55 * g(dt - .22, .06));   // lub ... dub
+    }
+    let s = 1 + .15 * v;
+    if (this.breath) {
+      const bt = t - this.breath;
+      if (bt < 1.2) s *= 1 - .2 * Math.sin(Math.PI * bt / 1.2);
+      else if (bt < 2.4) s *= 1 + .13 * Math.sin(Math.PI * (bt - 1.2) / 1.2);
+    }
+    return [s, v];
+  }
+
+  drawHeart(t) {
+    const c = fitCanvas(this.heartCv);
+    if (!c) return;
+    const { ctx, w, h } = c;
+    ctx.clearRect(0, 0, w, h);
+    const compact = document.body.classList.contains("compact");
+    const base = compact ? 12 : 23;
+    const [scale, v] = this.heartScale(t);
+    const p = this.pct;
+    let cx = w / 2, cy = h / 2 + 1;
+    if (p != null && p > 75 && v > .05) {                       // strain tremble
+      const k = (p > 90 ? 2.0 : 1.1) * Math.min(1, v);
+      cx += (Math.random() - .5) * 2 * k; cy += (Math.random() - .5) * 2 * k;
+    }
+    let col = this.color;
+    if (this.flash > 0) col = mix(col, [255, 255, 255], this.flash * (Math.sin(t * 40) > 0 ? .5 : .1));
+
+    ctx.save();
+    ctx.translate(cx, cy);
+
+    if (this.state === "blocked") {                              // gentle pulsing ring
+      const r = base * 1.42 + Math.sin(t * 2.6) * 3;
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.strokeStyle = rgb(STATES.blocked.heart, .25 + .2 * Math.sin(t * 2.6));
+      ctx.lineWidth = 2; ctx.stroke();
+    }
+
+    ctx.scale(scale, scale);
+    heartPath(ctx, base);
+    const hot = p != null && p > 90 && this.state !== "blocked";
+    ctx.shadowColor = rgb(hot ? [255, 120, 50] : col, .85);
+    ctx.shadowBlur = Math.min(compact ? 9 : 19, (compact ? 4 : 8) + (compact ? 5 : 11) * this.glow * (.55 + v) + (hot ? 4 * (1 + Math.sin(t * 7)) : 0));
+    const grad = ctx.createRadialGradient(-base * .35, -base * .45, base * .1, 0, 0, base * 1.2);
+    grad.addColorStop(0, rgb(mix(col, [255, 255, 255], .45)));
+    grad.addColorStop(.45, rgb(col));
+    grad.addColorStop(1, rgb(mix(col, [0, 0, 0], .45)));
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    if (p != null && p > 75 && !compact) {                     // veins
+      ctx.save();
+      heartPath(ctx, base); ctx.clip();
+      ctx.strokeStyle = p > 90 ? "rgba(90,10,0,.55)" : "rgba(70,0,12,.6)";
+      ctx.lineWidth = 1.1; ctx.lineCap = "round";
+      const b = base;
+      const vein = (pts) => { ctx.beginPath(); ctx.moveTo(pts[0], pts[1]); ctx.bezierCurveTo(...pts.slice(2)); ctx.stroke(); };
+      vein([0, -b * .5, -b * .1, -b * .2, -b * .35, -b * .05, -b * .42, b * .3]);
+      vein([-b * .22, -b * .12, -b * .45, -b * .2, -b * .62, -b * .3, -b * .75, -b * .5]);
+      vein([0, -b * .5, b * .15, -b * .15, b * .32, b * .05, b * .3, b * .45]);
+      vein([b * .22, -b * .02, b * .45, -b * .1, b * .6, -b * .05, b * .78, -b * .35]);
+      vein([-b * .38, b * .12, -b * .2, b * .3, -b * .1, b * .4, b * .02, b * .62]);
+      ctx.restore();
+    }
+    // specular highlight
+    ctx.beginPath();
+    ctx.ellipse(-base * .45, -base * .45, base * .22, base * .12, -0.7, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,255,255,.18)";
+    ctx.fill();
+    ctx.restore();
+  }
+
+  drawEcg(t) {
+    if (document.body.classList.contains("compact")) return;
+    const c = fitCanvas(this.ecgCv);
+    if (!c) return;
+    const { ctx, w, h } = c;
+    ctx.clearRect(0, 0, w, h);
+    // faint monitor grid
+    ctx.strokeStyle = "rgba(255,255,255,.035)"; ctx.lineWidth = 1;
+    ctx.beginPath();
+    const off = (this.head % 12);
+    for (let x = w - off; x > 0; x -= 12) { ctx.moveTo(x + .5, 0); ctx.lineTo(x + .5, h); }
+    for (let y = 6; y < h; y += 12) { ctx.moveTo(0, y + .5); ctx.lineTo(w, y + .5); }
+    ctx.stroke();
+
+    const mid = h * .64, sc = h * .26;
+    const cols = Math.min(Math.floor(w), this.N, this.head);
+    const yAt = i => Math.max(2, Math.min(h - 2, mid - this.ys[i] * sc));
+    ctx.lineWidth = 1.5; ctx.lineJoin = "round";
+    let curColor = null;
+    for (let k = 0; k < cols; k++) {
+      const abs = this.head - cols + k;
+      const idx = abs % this.N;
+      const x = w - cols + k;
+      const color = this.cs[idx];
+      if (color !== curColor) {
+        if (curColor) ctx.stroke();
+        curColor = color;
+        ctx.strokeStyle = rgb(color, .95);
+        ctx.shadowColor = rgb(color, .8); ctx.shadowBlur = 4;
+        ctx.beginPath();
+        if (k > 0) ctx.moveTo(x - 1, yAt((abs - 1) % this.N)); else ctx.moveTo(x, yAt(idx));
+      }
+      ctx.lineTo(x, yAt(idx));
+    }
+    if (curColor) ctx.stroke();
+    ctx.shadowBlur = 0;
+    // leading dot
+    if (cols) {
+      const last = (this.head - 1) % this.N;
+      ctx.beginPath(); ctx.arc(w - 1.5, yAt(last), 2, 0, Math.PI * 2);
+      ctx.fillStyle = rgb(this.cs[last]); ctx.fill();
+    }
+    // tool labels scroll with the line
+    ctx.font = "600 8px Segoe UI, sans-serif"; ctx.textBaseline = "top";
+    for (const l of this.labels) {
+      const x = w - (this.head - l.col);
+      if (x < -40) continue;
+      ctx.fillStyle = rgb(l.color, .9);
+      ctx.fillText(l.text, x + 3, 2);
+    }
+    if (this.state === "blocked") {
+      ctx.font = "700 10px Segoe UI, sans-serif"; ctx.textBaseline = "middle"; ctx.textAlign = "center";
+      ctx.fillStyle = rgb(STATES.blocked.heart, .55 + .45 * Math.sin(t * 4));
+      ctx.fillText("NEEDS YOU", w / 2, h * .32);
+      ctx.textAlign = "start";
+    }
+  }
+}
+
+// ---------- app --------------------------------------------------------------------------
+const vis = new Map();
+const cardsEl = document.getElementById("cards");
+const emptyEl = document.getElementById("empty");
+let fitTimer = null, lastFitH = 0;
+
+function fmtTime(ms) {
+  const d = new Date(ms);
+  return d.toLocaleTimeString([], { hour12: false });
+}
+function fmtDur(s) { return s < 60 ? s + "s" : Math.floor(s / 60) + "m" + String(s % 60).padStart(2, "0") + "s"; }
+
+function api() { return window.pywebview && window.pywebview.api; }
+
+function scheduleFit() {
+  clearTimeout(fitTimer);
+  fitTimer = setTimeout(() => {
+    const h = Math.ceil(document.getElementById("app").getBoundingClientRect().height);
+    if (Math.abs(h - lastFitH) > 1 && api() && api().fit) { lastFitH = h; api().fit(h); }
+  }, 60);
+}
+new ResizeObserver(scheduleFit).observe(document.getElementById("app"));
+
+function render(snap) {
+  const seen = new Set();
+  const live = snap.sessions.filter(s => s.state !== "ended").length;
+  document.body.classList.toggle("compact", snap.sessions.length > 4);
+  for (const s of snap.sessions) {
+    seen.add(s.id);
+    let v = vis.get(s.id);
+    if (!v) { v = new Vis(s.id); vis.set(s.id, v); }
+    v.update(s);
+  }
+  for (const [id, v] of vis) {
+    if (!seen.has(id)) {
+      vis.delete(id);
+      v.el.classList.add("leaving");
+      setTimeout(() => { v.el.remove(); scheduleFit(); }, 650);
+    }
+  }
+  // order: as the server sorted it (blocked first)
+  snap.sessions.forEach((s, i) => {
+    const el = vis.get(s.id).el;
+    if (cardsEl.children[i] !== el) cardsEl.insertBefore(el, cardsEl.children[i] || null);
+  });
+  emptyEl.style.display = snap.sessions.length ? "none" : "";
+  document.getElementById("count").textContent = live ? live + (live === 1 ? " session" : " sessions") : "";
+  scheduleFit();
+}
+
+function connect() {
+  const es = new EventSource("/stream");
+  const conn = document.getElementById("conn");
+  es.addEventListener("open", () => conn.classList.add("on"));
+  es.addEventListener("error", () => conn.classList.remove("on"));
+  es.addEventListener("state", e => render(JSON.parse(e.data)));
+  es.addEventListener("pulse", e => {
+    const p = JSON.parse(e.data);
+    const v = vis.get(p.sid);
+    if (v) v.pulse(p.kind, p.label, performance.now() / 1000);
+  });
+}
+
+document.getElementById("close").addEventListener("click", e => {
+  e.stopPropagation();
+  if (api() && api().hide) api().hide();
+});
+document.documentElement.addEventListener("mouseenter", () => api() && api().hover && api().hover(true));
+document.documentElement.addEventListener("mouseleave", () => api() && api().hover && api().hover(false));
+window.addEventListener("pywebviewready", () => { lastFitH = 0; scheduleFit(); });
+
+// ---------- frame loop: 30fps, 5fps when everything is calm ---------------------------------
+let lastFrame = performance.now() / 1000;
+function frame() {
+  requestAnimationFrame(frame);
+  const t = performance.now() / 1000;
+  let calm = true;
+  for (const v of vis.values()) {
+    if (!CALM.has(v.state) || t - v.lastPulseAt < 3 || v.breath || v.ecgEvents.some(e => e.kind !== "qrs")) { calm = false; break; }
+  }
+  const fps = calm ? 5 : 30;
+  if (t - lastFrame < 1 / fps - 0.004) return;
+  const dt = Math.min(t - lastFrame, 0.3);
+  lastFrame = t;
+  for (const v of vis.values()) { v.step(t, dt); v.drawHeart(t); v.drawEcg(t); }
+}
+connect();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
