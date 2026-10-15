@@ -1,4 +1,4 @@
-"""Claude Pulse — a live heartbeat monitor for Claude Code.
+"""Claude Pulse - a live heartbeat monitor for Claude Code.
 
     python pulse.py serve            server + window (what auto-start runs)
     python pulse.py demo [--ntfy]    two fake sessions cycling through every state
@@ -60,9 +60,9 @@ def _run_window_or_wait(app, port, cfg, headless, title=None, remember=True, sec
             ctl.run()          # blocks until the window is closed
             return
         except ImportError:
-            log.warning("pywebview is not installed — running headless. Open %s in a browser.", url)
+            log.warning("pywebview is not installed - running headless. Open %s in a browser.", url)
         except Exception:
-            log.exception("window failed — running headless. Open %s in a browser.", url)
+            log.exception("window failed - running headless. Open %s in a browser.", url)
     try:
         end = time.time() + seconds if seconds else None
         while end is None or time.time() < end:
@@ -174,7 +174,7 @@ def cmd_ntfy_test(args):
     print("To get notifications on your phone:")
     print("  1. Install the ntfy app (Android: Play Store / F-Droid, iPhone: App Store).")
     print("  2. Tap +, 'Subscribe to topic', enter:  %s" % n["topic"])
-    print("     (server %s — or open %s in a browser)" % (n["server"], url))
+    print("     (server %s - or open %s in a browser)" % (n["server"], url))
     print("  3. Set \"ntfy\": {\"enabled\": true} in %s" % config_mod.CONFIG_PATH)
     print("Keep the topic secret: anyone who knows it can read these notifications.")
     print("")
@@ -182,7 +182,7 @@ def cmd_ntfy_test(args):
                                priority=3, tags=["heartbeat"])
     print("Test notification: %s (%s)" % ("sent" if ok else "FAILED", detail))
     if ok and not n.get("enabled"):
-        print("Note: ntfy is currently DISABLED in config — real notifications won't be sent until you enable it.")
+        print("Note: ntfy is currently DISABLED in config - real notifications won't be sent until you enable it.")
     return 0 if ok else 1
 
 
@@ -226,7 +226,7 @@ def cmd_stop(args):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(prog="pulse.py", description="Claude Pulse — heartbeat monitor for Claude Code")
+    p = argparse.ArgumentParser(prog="pulse.py", description="Claude Pulse - heartbeat monitor for Claude Code")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("serve", help="run the server and window")
     s.add_argument("--headless", action="store_true", help="no window; view at http://127.0.0.1:<port>/")

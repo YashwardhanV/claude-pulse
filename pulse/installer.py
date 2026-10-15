@@ -162,7 +162,7 @@ def install(port, path=None, pip=True, out=print):
     out("  auto-start:    %s" % ensure_command())
     out("Everything else in settings.json was left as it was.")
     if pip:
-        out("Installing Python dependencies (pywebview)…")
+        out("Installing Python dependencies (pywebview)...")
         r = subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "pywebview"])
         out("  pip: %s" % ("ok" if r.returncode == 0 else "FAILED (exit %d)" % r.returncode))
     out("")
@@ -180,7 +180,7 @@ def uninstall(path=None, out=print):
         return False
     after, removed = strip(before)
     if not removed:
-        out("No Claude Pulse hooks found in %s — nothing to do." % path)
+        out("No Claude Pulse hooks found in %s - nothing to do." % path)
         return True
     bak = backup(path)
     write_settings(after, path)
