@@ -6,7 +6,9 @@
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 **A live heartbeat monitor for [Claude Code](https://code.claude.com).** A small always-on-top window on the right edge of your screen that shows what Claude Code is
-doing, so you don't have to switch back to the terminal to check on it.
+doing, so you don't have to switch back to the terminal to check on it. The window only
+appears while a Claude Code session is live and hides itself when the last one ends, so it never
+sits over your other apps when you're not using Claude Code.
 
 * **A beating heart and a scrolling ECG strip.** The heart's rhythm follows Claude Code's state.
   Every tool call adds a taller spike labelled with the tool name.

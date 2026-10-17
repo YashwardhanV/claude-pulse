@@ -44,20 +44,28 @@ def _build(cfg, notify_enabled=None, demo=False):
     return app
 
 
-def _run_window_or_wait(app, port, cfg, headless, title=None, remember=True, seconds=None):
+def _run_window_or_wait(app, port, cfg, headless, title=None, remember=True, seconds=None, idle_hide=False):
     log = logging.getLogger("pulse")
     url = "http://127.0.0.1:%d/" % port
     if not headless:
         try:
             from pulse.window import TITLE, WindowController
-            ctl = WindowController(cfg, url, title=title or TITLE, remember_position=remember)
+            ctl = WindowController(cfg, url, title=title or TITLE, remember_position=remember,
+                                  start_hidden=idle_hide)
             ctl.create()
-            app.on_event = ctl.show_if_hidden
+            on_start = None
+            if idle_hide:    # only show the widget while a Claude Code session is live
+                ctl.active_fn = app.registry.active_count
+                app.on_event = lambda: ctl.sync(app.registry.active_count(), from_event=True)
+                app.on_state = lambda: ctl.sync(app.registry.active_count())
+                on_start = lambda: ctl.sync(app.registry.active_count(), from_event=True)
+            else:
+                app.on_event = ctl.show_if_hidden
             if seconds:
                 import threading
                 import webview
                 threading.Timer(seconds, lambda: [w.destroy() for w in list(webview.windows)]).start()
-            ctl.run()          # blocks until the window is closed
+            ctl.run(on_start)  # blocks until the window is closed
             return
         except ImportError:
             log.warning("pywebview is not installed - running headless. Open %s in a browser.", url)
@@ -102,7 +110,7 @@ def cmd_serve(args):
         # Blocks until the window is closed (× only hides it). Closing it for real, e.g.
         # Alt+F4, stops the server; the next SessionStart hook starts a fresh one.
         headless = args.headless or os.environ.get("PULSE_HEADLESS") == "1"
-        _run_window_or_wait(app, port, cfg, headless)
+        _run_window_or_wait(app, port, cfg, headless, idle_hide=True)
         log.info("window closed; exiting")
     finally:
         app.stop()

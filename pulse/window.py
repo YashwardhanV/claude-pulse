@@ -30,13 +30,15 @@ class Api:
 
 
 class WindowController:
-    def __init__(self, cfg, url, title=TITLE, remember_position=True):
+    def __init__(self, cfg, url, title=TITLE, remember_position=True, start_hidden=False):
         self.cfg = cfg
         self.url = url
         self.title = title
         self.remember = remember_position
         self.window = None
-        self.hidden = False
+        self.start_hidden = start_hidden   # real server: stay hidden until a session is live
+        self.hidden = start_hidden
+        self.active_fn = None    # set by the server; lets the shown event re-hide an idle window
         self._height = 240
         self._save_timer = None
         self._hwnd = None
@@ -59,21 +61,24 @@ class WindowController:
         self.window = webview.create_window(
             self.title, self.url, js_api=Api(self), width=WIDTH, height=self._height,
             x=int(x), y=int(y), frameless=True, on_top=True, resizable=False, easy_drag=False,
-            background_color="#0b0d12", min_size=(WIDTH, 60), focus=False)
+            background_color="#0b0d12", min_size=(WIDTH, 60), focus=False, hidden=self.start_hidden)
         self.window.events.moved += self._on_moved
         self.window.events.shown += self._on_shown
         self.window.events.closed += self._on_closed
         self._closed = False
         return self.window
 
-    def run(self):
+    def run(self, on_start=None):
         import webview
-        webview.start(debug=bool(os.environ.get("PULSE_DEBUG")))
+        webview.start(on_start, debug=bool(os.environ.get("PULSE_DEBUG")))
 
     def _on_screen(self, x, y):
         return -WIDTH < x < self.screen[0] + 4000 and -50 < y < self.screen[1] + 2000
 
     def _on_shown(self):
+        if self.active_fn and self.active_fn() <= 0:
+            self.sync(0)         # the OS shows the window after load, even if created hidden
+            return
         threading.Timer(0.3, lambda: self._set_alpha(self._opacity())).start()
         if sys.platform == "win32":
             threading.Thread(target=self._hover_loop, name="hover", daemon=True).start()
@@ -111,6 +116,16 @@ class WindowController:
         if self.window and not self.hidden:
             self.hidden = True
             self.window.hide()
+
+    def sync(self, active, from_event=False):
+        """Show the widget only while a session is live. An event from a live session
+        re-shows it (even after the x); zero live sessions always hides it."""
+        if active <= 0:
+            if self.window:      # forced: the flag can disagree with reality at startup
+                self.hidden = True
+                self.window.hide()
+        elif from_event:
+            self.show_if_hidden()
 
     def show_if_hidden(self):
         if self.window and self.hidden:

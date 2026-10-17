@@ -54,6 +54,7 @@ class PulseApp:
         self.registry = registry
         self.hub = hub
         self.on_event = on_event          # e.g. show a hidden window
+        self.on_state = None              # called on every state change (hides the window when idle)
         self.accept_events = accept_events
         self.started = time.time()
         self._stop = threading.Event()
@@ -63,6 +64,11 @@ class PulseApp:
     def emit(self, kind, data):
         if kind == "state":
             self.hub.broadcast("state", self.registry.snapshot())
+            if self.on_state:
+                try:
+                    self.on_state()
+                except Exception:
+                    log.exception("on_state failed")
         elif kind == "learn_window":
             model, window = data
             log.info("learned: %s has a %d-token context window", model, window)

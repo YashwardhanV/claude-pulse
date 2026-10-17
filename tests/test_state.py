@@ -398,3 +398,14 @@ def test_response_failed():
     assert not response_failed({"interrupted": True, "error": "x"})
     assert not response_failed("plain string")
     assert not response_failed({"code": 404})
+
+
+def test_active_count_drops_to_zero_when_sessions_end(env):
+    reg = env[0]
+    assert reg.active_count() == 0
+    reg.handle(ev("SessionStart", sid="a"))
+    reg.handle(ev("SessionStart", sid="b"))
+    assert reg.active_count() == 2
+    reg.handle(ev("SessionEnd", sid="a"))
+    reg.handle(ev("SessionEnd", sid="b"))
+    assert reg.active_count() == 0
