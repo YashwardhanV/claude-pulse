@@ -10,6 +10,11 @@ window at the edge of your screen tells you, at a glance, the only three things 
 each Claude Code session: **working**, **needs you**, or **done**. You stop switching back to the
 terminal to check on it.
 
+<p align="center">
+  <img src="docs/demo.gif" width="250" alt="Animated demo: two Claude Code sessions. One asks for permission and turns amber (NEEDS YOU) while the other works with labelled tool spikes and a red spike for a failed Bash call; both finish green (done)">
+  <br><sub>Live from <code>python pulse.py demo</code></sub>
+</p>
+
 * **One card per session**, with a beating heart and a scrolling ECG strip. Every tool call is a
   labelled spike; a failed tool is a red spike.
 * **Needs you** turns the card amber, moves it to the top and says why (permission for Bash, a
@@ -268,7 +273,7 @@ pulse/installer.py    settings.json merge/strip
 pulse/demo.py         demo script
 web/index.html        canvas heart + ECG + cards (no frameworks)
 docs/HOOKS_NOTES.md   what was verified against the official docs
-docs/screenshots/     README images
+docs/screenshots/     README images; docs/demo.gif the animated demo
 tests/                pytest suite (state machine, mute, status line, notifier, installer, real hook commands)
 ```
 
