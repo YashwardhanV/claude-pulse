@@ -1,4 +1,4 @@
-# Claude Code hooks — what was verified (2026-10-15, Claude Code 2.1.300)
+# Claude Code hooks — what was verified (2026-10-15, Claude Code 2.1.300; updated 2026-11-17)
 
 Sources: <https://code.claude.com/docs/en/hooks>, <https://code.claude.com/docs/en/statusline>,
 plus real transcripts under `~/.claude/projects/` on this machine.
@@ -11,14 +11,14 @@ The docs list 33 events. The ones Claude Pulse uses:
 |---|---|---|
 | `SessionStart` | create card, auto-start server (`source`: startup/resume/clear/compact/fork) | yes |
 | `UserPromptSubmit` | start of a task (we never read `prompt`) | **no** |
-| `PreToolUse` | tool spike, `working` | yes (tool name) |
-| `PostToolUse` | `working`, error detection in `tool_response` | yes |
-| `PostToolUseFailure` | **dedicated tool-failure event** → `error` (`error`, `is_interrupt`) | yes |
+| `PreToolUse` | `AskUserQuestion` / `ExitPlanMode` only → needs you | yes (tool name) |
+| `PostToolUse` | tool spike, `working`, error detection in `tool_response` (async) | yes |
+| `PostToolUseFailure` | **dedicated tool-failure event** → red spike (`error`, `is_interrupt`) (async) | yes |
 | `PermissionRequest` | permission dialog shown → `blocked` | yes |
 | `Notification` | `blocked` (`notification_type`: `permission_prompt`, `idle_prompt`, `elicitation_dialog`, `agent_needs_input`, …) | yes |
 | `Stop` | `done` | **no** |
 | `SubagentStop` | flutter pulse | yes (agent type) |
-| `PreCompact` | deep-breath animation, reset context gauge (`trigger`: manual/auto) | yes |
+| `PreCompact` | deep-breath animation (`trigger`: manual/auto) (async) | yes |
 | `SessionEnd` | `ended` (`reason`: clear/resume/logout/prompt_input_exit/other). Shares a 1.5 s budget. | yes |
 
 Other events that exist but are not used: `Setup`, `UserPromptExpansion`, `StopFailure`,
@@ -90,18 +90,22 @@ curl.exe -s -m 1 -o NUL -H "Content-Type: application/json" --data-binary "@-" h
 Our hooks always exit 0: the curl command ends in `; exit 0`, and `pulse.py ensure-running`
 catches every exception and calls `os._exit(0)`.
 
-## Status line (not used, but relevant)
+## Async and HTTP hooks (2026-11-17)
 
-The status line JSON has `context_window.context_window_size` (200000 by default, 1000000 for
-extended-context models) and `used_percentage`, computed as
-`input_tokens + cache_creation_input_tokens + cache_read_input_tokens` (output tokens excluded).
-Claude Pulse uses the same formula on the transcript.
+* `"async": true` is a field on `type: "command"` handlers only. Claude Code starts the process and
+  continues without waiting; `timeout` is not enforced on it; stdin is the same JSON. Output can
+  only feed `additionalContext` / `systemMessage` on the next turn, so we still print nothing.
+  The docs give no ordering guarantee, which is why only per-tool events are async (see
+  `LATE_EVENT_SECONDS` in `pulse/state.py`).
+* `"type": "http"` POSTs the hook JSON to a `url` with no shell at all. A refused connection is a
+  non-blocking error and shows a `hook error` notice, so it is noisy whenever Pulse is not
+  running. Not used for that reason.
 
-## Transcript JSONL (verified on this machine)
+## Status line (used since 2026-11-17)
 
-Assistant lines look like
-`{"type":"assistant","isSidechain":false,"message":{"model":…,"content":[{"type":"thinking",…}|{"type":"text"}|{"type":"tool_use"}],"usage":{"input_tokens":2,"cache_creation_input_tokens":2942,"cache_read_input_tokens":62730,"output_tokens":683,…}}}`.
-Each content block may be its own line. Lines can be very large (`api-request-blob`), and the
-last line may be partially written, so the watcher buffers until a newline arrives.
-One real session here reached 515k tokens, i.e. a 1M-context model — so when usage exceeds
-`context_window_tokens`, Pulse assumes a 1,000,000-token window.
+`pulse.py statusline` reads the status line JSON on stdin. It has
+`context_window.context_window_size` (200000 by default, 1000000 for extended-context models) and
+`used_percentage`, computed as `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`
+(output tokens excluded). `used_percentage` may be `null` early in a session and right after
+`/compact`. On Windows the command runs through Git Bash or PowerShell, so paths use forward
+slashes. This replaced the transcript tailer and its guess of the window size.

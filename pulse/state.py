@@ -4,17 +4,23 @@ Pure logic: time comes from an injectable clock, side effects go out through cal
 (`emit(kind, data)` for the UI and `notify(kind, session)` for phone notifications), so the
 whole thing is unit-testable without threads or sockets.
 """
-import os
+import re
 import threading
 import time
 from collections import deque
 
 from .summarize import response_failed, short_tool, summarize
 
-IDLE, WORKING, THINKING, BLOCKED, ERROR, DONE, ENDED = (
-    "idle", "working", "thinking", "blocked", "error", "done", "ended")
+IDLE, WORKING, BLOCKED, DONE, ENDED = "idle", "working", "blocked", "done", "ended"
 
-ERROR_SECONDS = 6
+# What the widget shows. Only three states matter to a person: Claude is working, Claude needs
+# you, Claude is done. A fresh session (idle) looks like done, with the badge "ready".
+VISIBLE = {IDLE: DONE, WORKING: WORKING, BLOCKED: BLOCKED, DONE: DONE, ENDED: ENDED}
+BADGE = {IDLE: "ready", WORKING: "working", BLOCKED: "needs you", DONE: "done", ENDED: "ended"}
+
+# Tool hooks are async, so a PostToolUse can arrive just after the (synchronous) Stop or
+# PermissionRequest that followed it. Within this window it must not undo that state.
+LATE_EVENT_SECONDS = 3
 STALE_SECONDS = 15 * 60
 STALE_BLOCKED_SECONDS = 60 * 60   # a session waiting on you is kept around longer
 REMOVE_AFTER_SECONDS = 10
@@ -32,9 +38,10 @@ BLOCKING_TOOLS = {"AskUserQuestion": "question for you", "ExitPlanMode": "plan a
 
 
 def project_name(cwd):
+    """Last folder of cwd. Splits on both separators, so Windows paths work on any OS."""
     if not cwd:
         return "claude"
-    return os.path.basename(str(cwd).rstrip("/\\")) or str(cwd)
+    return re.split(r"[\\/]", str(cwd).rstrip("/\\"))[-1] or str(cwd)
 
 
 class Session:
@@ -45,28 +52,17 @@ class Session:
         self.transcript_path = None
         self.created = now
         self.base = IDLE
-        self.error_until = None
+        self.settled_at = None         # when the session last became done or blocked
         self.last_activity = now
-        self.last_work = None          # last prompt/tool event — the silence timer
         self.task_started = None
         self.blocked_since = None
         self.blocked_reason = ""
+        self.blocked_key = None        # (tool, summary) of the call waiting on you, if any
         self.blocked_notified = False
         self.ended_at = None
         self.last_action = "session started"
         self.events = deque(maxlen=EVENT_LOG)
-        self.context_tokens = None
-        self.context_window = None
-        self.context_pct = None
-        self.window_hint = None        # 1M if the model id says so
         self.tool_count = 0
-
-    def display_state(self, now):
-        if self.base in (ENDED, BLOCKED):
-            return self.base
-        if self.error_until is not None and now < self.error_until:
-            return ERROR
-        return self.base
 
     def log(self, now, text):
         self.events.append((now, text))
@@ -81,11 +77,6 @@ class Registry:
         self.sessions = {}
         self.lock = threading.RLock()
         self._outbox = []
-
-    # ---- config helpers -------------------------------------------------------------
-    @property
-    def silence(self):
-        return float(self.cfg.get("thinking_silence_seconds", 5))
 
     # ---- outbox: side effects are flushed outside the lock ----------------------------
     def _queue(self, kind, data):
@@ -143,27 +134,37 @@ class Registry:
         if s.base == BLOCKED and state != BLOCKED:
             s.blocked_since = None
             s.blocked_reason = ""
+            s.blocked_key = None
+        if state == DONE and s.base != DONE:
+            s.settled_at = now
         s.base = state
 
-    def _block(self, s, reason, now):
+    def _block(self, s, reason, now, key=None):
         if s.base != BLOCKED:
             s.blocked_since = now
             s.blocked_notified = False
+            s.settled_at = now
         s.base = BLOCKED
         s.blocked_reason = reason
+        s.blocked_key = key
         s.last_action = reason
         s.log(now, "blocked · " + reason)
 
     def _work(self, s, now):
         self._set_base(s, WORKING, now)
-        s.last_work = now
         if s.task_started is None:
             s.task_started = now
 
+    def _late(self, s, key, now):
+        """True for a tool result that belongs to before the current done/blocked state."""
+        if s.base not in (DONE, BLOCKED) or s.settled_at is None:
+            return False
+        if s.base == BLOCKED and s.blocked_key == key:
+            return False             # the call you just approved or answered has finished
+        return now - s.settled_at < LATE_EVENT_SECONDS
+
     def _on_SessionStart(self, s, p, now):
         source = p.get("source") or "startup"
-        if "[1m]" in str(p.get("model") or "").lower():
-            s.window_hint = 1_000_000
         if source == "clear":
             self._set_base(s, IDLE, now)
             s.task_started = None
@@ -172,33 +173,42 @@ class Registry:
     def _on_UserPromptSubmit(self, s, p, now):
         self._set_base(s, WORKING, now)
         s.task_started = now
-        s.last_work = now
         s.last_action = "prompt sent"
         s.log(now, "prompt sent")
 
     def _on_PreToolUse(self, s, p, now):
+        # Installed only for the tools that are a question to you (AskUserQuestion,
+        # ExitPlanMode). Older installs send it for every tool: then it just means "working".
         tool = p.get("tool_name") or "tool"
-        label = short_tool(tool)
-        summary = summarize(tool, p.get("tool_input"))
-        action = (label + " " + summary).strip()
-        s.tool_count += 1
         if tool in BLOCKING_TOOLS:
-            s.last_work = now
-            self._block(s, BLOCKING_TOOLS[tool], now)
-        else:
+            self._block(s, BLOCKING_TOOLS[tool], now, key=_key(tool, p))
+        elif not self._late(s, _key(tool, p), now):
             self._work(s, now)
-            s.last_action = action
-            s.log(now, action)
-        self._pulse(s, "tool", label)
 
     def _on_PostToolUse(self, s, p, now):
+        # The tool spike comes from here: one async hook per tool call instead of two
+        # synchronous ones.
         tool = p.get("tool_name") or "tool"
+        label = short_tool(tool)
+        action = (label + " " + summarize(tool, p.get("tool_input"))).strip()
+        s.tool_count += 1
+        self._pulse(s, "tool", label)
+        failed = response_failed(p.get("tool_response"))
+        if self._late(s, _key(tool, p), now):
+            s.log(now, action + (" (failed)" if failed else ""))
+            return
         self._work(s, now)
-        if response_failed(p.get("tool_response")):
+        s.last_action = action
+        s.log(now, action)
+        if failed:
             self._error(s, tool, now)
 
     def _on_PostToolUseFailure(self, s, p, now):
         tool = p.get("tool_name") or "tool"
+        if self._late(s, _key(tool, p), now) and not p.get("is_interrupt"):
+            s.log(now, short_tool(tool) + " failed")
+            self._pulse(s, "error", short_tool(tool))
+            return
         if p.get("is_interrupt"):
             # Esc in the terminal: Claude stops, and Stop may not fire.
             self._set_base(s, DONE, now)
@@ -210,13 +220,14 @@ class Registry:
         self._error(s, tool, now)
 
     def _error(self, s, tool, now):
-        s.error_until = now + ERROR_SECONDS
+        # Not a state of its own any more: a red spike and a flash, and the status line says so.
         s.last_action = short_tool(tool) + " failed"
         s.log(now, s.last_action)
         self._pulse(s, "error", short_tool(tool))
 
     def _on_PermissionRequest(self, s, p, now):
-        self._block(s, "permission for " + short_tool(p.get("tool_name")), now)
+        tool = p.get("tool_name") or "tool"
+        self._block(s, "permission for " + short_tool(tool), now, key=_key(tool, p))
 
     def _on_Notification(self, s, p, now):
         nt = p.get("notification_type") or ""
@@ -226,7 +237,7 @@ class Registry:
             self._block(s, BLOCKING_NOTIFICATIONS[nt], now)
         elif nt == "idle_prompt":
             # Sitting at the prompt. If we never saw Stop, it is waiting on you.
-            if s.base in (WORKING, THINKING):
+            if s.base == WORKING:
                 self._block(s, "waiting for input", now)
             else:
                 s.log(now, "idle at prompt")
@@ -248,8 +259,6 @@ class Registry:
         self._pulse(s, "flutter")
 
     def _on_PreCompact(self, s, p, now):
-        s.context_pct = None
-        s.context_tokens = None
         s.log(now, "compacting (%s)" % (p.get("trigger") or "auto"))
         s.last_action = "compacting context"
         self._pulse(s, "breath")
@@ -260,39 +269,6 @@ class Registry:
         s.last_action = "session ended"
         s.log(now, "session ended" + (" (%s)" % p["reason"] if p.get("reason") else ""))
 
-    # ---- transcript-driven updates ---------------------------------------------------
-    def transcript_thinking(self, sid):
-        """Transcript shows a fresh thinking block: confirm `thinking` early."""
-        with self.lock:
-            s = self.sessions.get(sid)
-            if not s or s.base != WORKING:
-                return
-            s.base = THINKING
-            self._queue("state", None)
-        self._flush()
-
-    def set_context(self, sid, tokens, model=None):
-        learned = None
-        with self.lock:
-            s = self.sessions.get(sid)
-            if not s or tokens is None:
-                return
-            overrides = self.cfg.get("context_window_overrides") or {}
-            window = (s.window_hint or (model and overrides.get(model))
-                      or int(self.cfg.get("context_window_tokens", 200000)))
-            if tokens > window:
-                window = max(window, 1_000_000)   # extended-context model
-                if model and overrides.get(model) != window:
-                    learned = (model, window)
-                    self.cfg.setdefault("context_window_overrides", {})[model] = window
-            s.context_tokens = int(tokens)
-            s.context_window = window
-            s.context_pct = round(100.0 * tokens / window, 1)
-            self._queue("state", None)
-            if learned:
-                self._queue("learn_window", learned)
-        self._flush()
-
     # ---- timers ----------------------------------------------------------------------
     def tick(self):
         """Advance time-based transitions. Call ~2x per second."""
@@ -301,12 +277,6 @@ class Registry:
         with self.lock:
             blocked_after = float(self.cfg.get("notify_blocked_after_seconds", 30))
             for sid, s in list(self.sessions.items()):
-                if s.base == WORKING and s.last_work is not None and now - s.last_work >= self.silence:
-                    s.base = THINKING
-                    changed = True
-                if s.error_until is not None and now >= s.error_until:
-                    s.error_until = None
-                    changed = True
                 if (s.base == BLOCKED and not s.blocked_notified and s.blocked_since is not None
                         and now - s.blocked_since >= blocked_after):
                     s.blocked_notified = True
@@ -343,7 +313,7 @@ class Registry:
 
     def state_of(self, sid):
         s = self.sessions.get(sid)
-        return s.display_state(self.clock()) if s else None
+        return s.base if s else None
 
     def snapshot(self):
         now = self.clock()
@@ -357,7 +327,8 @@ class Registry:
                                          s.blocked_since or 0, s.created))
             out = []
             for s in sessions:
-                state = s.display_state(now)
+                state = VISIBLE[s.base]
+                badge = BADGE[s.base]
                 title = s.project
                 if per_project.get(s.project, 0) > 1:
                     title += " · " + s.id[:4]
@@ -367,13 +338,16 @@ class Registry:
                     "title": title,
                     "project": s.project,
                     "state": state,
-                    "status": state + (" · " + detail if detail else ""),
+                    "badge": badge,
+                    "status": badge + (" · " + detail if detail else ""),
                     "blocked_for": round(now - s.blocked_since) if s.blocked_since else None,
-                    "context_pct": s.context_pct,
-                    "context_tokens": s.context_tokens,
-                    "context_window": s.context_window,
                     "tools": s.tool_count,
                     "ended_ago": round(now - s.ended_at, 1) if s.ended_at else None,
                     "events": [[round(ts * 1000), text] for ts, text in s.events],
                 })
             return {"now": round(now * 1000), "sessions": out}
+
+
+def _key(tool, p):
+    """Identifies one tool call across events (PermissionRequest has no tool_use_id)."""
+    return (tool, summarize(tool, p.get("tool_input")))

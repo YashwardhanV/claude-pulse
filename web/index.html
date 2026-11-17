@@ -48,7 +48,7 @@
     0%, 100% { border-color: rgba(245,165,36,.35); box-shadow: 0 0 0 0 rgba(245,165,36,0); }
     50% { border-color: rgba(245,165,36,1); box-shadow: 0 0 10px 0 rgba(245,165,36,.35); }
   }
-  .card.error { border-color: rgba(255,59,59,.7); }
+  .card.failed { border-color: rgba(255,59,59,.7); }
   .card.ended { opacity: 0; transition: opacity 9s linear; }
   .card.leaving { opacity: 0; }
   .head {
@@ -60,33 +60,17 @@
     padding: 1px 6px; border-radius: 99px; background: #222836; color: var(--muted); flex: none;
   }
   .badge.blocked { background: rgba(245,165,36,.18); color: var(--amber); }
-  .badge.error { background: rgba(255,59,59,.18); color: #ff6b6b; }
   .badge.done { background: rgba(92,201,139,.15); color: var(--green); }
-  .badge.thinking { background: rgba(125,211,252,.13); color: #7dd3fc; }
   .badge.working { background: rgba(229,72,77,.15); color: #ff7b7f; }
   .body { padding: 2px 6px 7px; cursor: pointer; }
   .row { display: flex; align-items: center; justify-content: center; gap: 4px; }
   canvas.heart { width: 132px; height: 90px; display: block; margin-bottom: -4px; }
-  .bp { display: flex; flex-direction: column; align-items: center; gap: 3px; width: 32px; }
-  .bptube {
-    width: 6px; height: 56px; border-radius: 3px; background: #0c0f15;
-    border: 1px solid #262c39; position: relative; overflow: hidden;
-  }
-  .bpfill {
-    position: absolute; left: 0; right: 0; bottom: 0; height: 0%;
-    background: var(--green); transition: height .8s ease, background-color .8s ease;
-  }
-  .bpfill.hot { animation: hot 0.9s ease-in-out infinite; }
-  @keyframes hot { 50% { filter: brightness(1.6); } }
-  .bplabel { font-size: 9px; color: var(--muted); font-variant-numeric: tabular-nums; }
   canvas.ecg { width: 100%; height: 44px; display: block; border-radius: 6px; background: #0a0d12; }
   .status {
     margin-top: 5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     font-size: 11px;
   }
   .status .st { font-weight: 600; }
-  .hint { display: none; margin-top: 3px; color: #ff8a6b; font-size: 10px; }
-  .hint.show { display: block; }
   .events { display: none; margin-top: 6px; border-top: 1px solid var(--line); padding-top: 4px; }
   .card.open .events { display: block; }
   .ev { display: flex; gap: 6px; font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; }
@@ -94,12 +78,9 @@
   .ev .x { overflow: hidden; text-overflow: ellipsis; color: #aab2c2; }
 
   body.compact canvas.heart { width: 46px; height: 38px; }
-  body.compact .ecg, body.compact .hint { display: none !important; }
+  body.compact .ecg { display: none !important; }
   body.compact .row { justify-content: flex-start; }
   body.compact .body { display: flex; align-items: center; gap: 4px; padding: 0 6px 4px; }
-  body.compact .bp { width: auto; flex-direction: row; }
-  body.compact .bptube { width: 26px; height: 5px; }
-  body.compact .bpfill { top: 0; height: 100% !important; right: auto; width: var(--pct, 0%); transition: width .8s ease; }
   body.compact .status { margin-top: 0; flex: 1; min-width: 0; font-size: 10px; }
   body.compact .head { padding-top: 4px; }
 
@@ -123,19 +104,18 @@
 "use strict";
 
 // ---------- look & feel per state ---------------------------------------------------------
+// Three states a person cares about (working / needs you / done), plus ended while a card fades.
+// A failed tool is not a state: it is a red spike and a flash.
 const STATES = {
-  idle:     { bpm: 40,  heart: [143, 59, 64],  glow: .22, ecg: [63, 143, 102],  amp: .3 },
   working:  { bpm: 75,  heart: [229, 72, 77],  glow: .5,  ecg: [61, 220, 132],  amp: 1 },
-  thinking: { bpm: 130, heart: [255, 96, 102], glow: .8,  ecg: [125, 211, 252], amp: .55 },
   blocked:  { bpm: 76,  heart: [245, 165, 36], glow: .9,  ecg: [245, 165, 36],  amp: 0 },
-  error:    { bpm: 96,  heart: [255, 46, 58],  glow: .9,  ecg: [255, 59, 59],   amp: 1 },
   done:     { bpm: 50,  heart: [104, 196, 138], glow: .45, ecg: [92, 201, 139],  amp: .7 },
   ended:    { bpm: 30,  heart: [90, 90, 96],   glow: .1,  ecg: [70, 70, 76],    amp: .15 },
 };
 const RED = [255, 59, 59];
 const ECG_SPEED = 46;        // px per second
 const ECG_DELAY = 0.28;      // render this far behind "now" so P waves can lead the R peak
-const CALM = new Set(["idle", "done", "ended"]);
+const CALM = new Set(["done", "ended"]);
 
 const g = (x, w) => Math.exp(-(x / w) * (x / w));
 const lerp = (a, b, k) => a + (b - a) * k;
@@ -178,13 +158,9 @@ class Vis {
     this.el.innerHTML = `
       <div class="head pywebview-drag-region"><span class="title pywebview-drag-region"></span><span class="badge"></span></div>
       <div class="body">
-        <div class="row">
-          <canvas class="heart"></canvas>
-          <div class="bp" title="context window used"><div class="bptube"><div class="bpfill"></div></div><span class="bplabel">—</span></div>
-        </div>
+        <div class="row"><canvas class="heart"></canvas></div>
         <canvas class="ecg"></canvas>
         <div class="status"></div>
-        <div class="hint">context nearly full — consider /compact or /clear</div>
         <div class="events"></div>
       </div>`;
     this.$ = sel => this.el.querySelector(sel);
@@ -192,10 +168,10 @@ class Vis {
     this.ecgCv = this.$("canvas.ecg");
     this.$(".body").addEventListener("click", () => { this.el.classList.toggle("open"); scheduleFit(); });
 
-    this.state = "idle";
+    this.state = "done";
     this.data = null;
-    this.bpm = 40;
-    this.color = STATES.idle.heart.slice();
+    this.bpm = 50;
+    this.color = STATES.done.heart.slice();
     this.glow = .2;
     this.nextBeat = 0;
     this.beatN = 0;
@@ -203,11 +179,11 @@ class Vis {
     this.ecgEvents = [];    // {t, kind, amp, label}
     this.breath = null;
     this.flash = 0;
-    this.pct = null;
+    this.failedUntil = 0;
     // ECG ring buffer, one sample per CSS px column
     this.N = 400;
     this.ys = new Float32Array(this.N);
-    this.cs = new Array(this.N).fill(STATES.idle.ecg);
+    this.cs = new Array(this.N).fill(STATES.done.ecg);
     this.head = 0;           // absolute column count
     this.colAcc = 0;
     this.labels = [];        // {col, text, color}
@@ -217,16 +193,14 @@ class Vis {
   update(d) {
     this.data = d;
     const prev = this.state;
-    this.state = d.state;
-    this.pct = d.context_pct;
+    this.state = STATES[d.state] ? d.state : "working";
     this.el.classList.toggle("blocked", d.state === "blocked");
-    this.el.classList.toggle("error", d.state === "error");
     if (d.state === "ended" && prev !== "ended") this.el.classList.add("ended");
     this.$(".title").textContent = d.title;
     this.$(".title").title = d.project;
     const badge = this.$(".badge");
-    badge.textContent = d.state === "blocked" ? "needs you" : d.state;
-    badge.className = "badge " + d.state;
+    badge.textContent = d.badge || d.state;
+    badge.className = "badge " + this.state;
     const [st, ...rest] = d.status.split(" · ");
     let detail = rest.join(" · ");
     if (d.state === "blocked" && d.blocked_for > 2) detail += ` · ${fmtDur(d.blocked_for)}`;
@@ -235,22 +209,8 @@ class Vis {
     const b = document.createElement("span"); b.className = "st"; b.textContent = st;
     status.append(b, document.createTextNode(detail ? " · " + detail : ""));
     status.title = d.status;
-    status.style.color = d.state === "blocked" ? "var(--amber)" : d.state === "error" ? "#ff6b6b" : "";
+    status.style.color = d.state === "blocked" ? "var(--amber)" : / failed$/.test(st + " " + detail) ? "#ff6b6b" : "";
 
-    const fill = this.$(".bpfill"), label = this.$(".bplabel");
-    if (d.context_pct == null) {
-      fill.style.height = "0%"; this.el.style.setProperty("--pct", "0%"); label.textContent = "—";
-      this.$(".bp").title = "context window used: no reading yet";
-    } else {
-      const p = Math.max(0, Math.min(100, d.context_pct));
-      fill.style.height = p + "%";
-      this.el.style.setProperty("--pct", p + "%");
-      fill.style.backgroundColor = p > 90 ? "#ff3b3b" : p > 75 ? "#ff8a3d" : p > 50 ? "#f5c542" : "#3ddc84";
-      fill.classList.toggle("hot", p > 90);
-      label.textContent = Math.round(p) + "%";
-      this.$(".bp").title = `context: ${d.context_tokens.toLocaleString()} / ${d.context_window.toLocaleString()} tokens`;
-    }
-    this.$(".hint").classList.toggle("show", d.context_pct != null && d.context_pct > 90);
 
     const evs = this.$(".events");
     evs.innerHTML = "";
@@ -269,6 +229,9 @@ class Vis {
       this.ecgEvents.push({ t, kind: "tool", label });
     } else if (kind === "error") {
       this.flash = 1;
+      this.el.classList.add("failed");
+      clearTimeout(this.failedTimer);
+      this.failedTimer = setTimeout(() => this.el.classList.remove("failed"), 4000);
       this.ecgEvents.push({ t, kind: "err", label });
     } else if (kind === "flutter") {
       for (let i = 0; i < 3; i++) this.pulses.push({ t: t + i * .09, a: .28 });
@@ -278,22 +241,17 @@ class Vis {
     }
   }
 
-  targetBpm() {
-    let bpm = STATES[this.state].bpm;
-    if (this.pct != null && this.pct > 75 && this.state !== "blocked") bpm *= 1.08;
-    return bpm;
-  }
+  targetBpm() { return STATES[this.state].bpm; }
 
   beat(t) {
     const st = this.state;
     this.beatN++;
-    let interval = 60 / this.bpm;
-    if (st === "error") interval *= 0.45 + Math.random() * 1.2;      // arrhythmia
+    const interval = 60 / this.bpm;
     this.nextBeat = t + interval;
     if (st === "blocked" && this.beatN % 3 === 0) return;           // beat-beat-pause
     if (this.breath && t - this.breath < 2.4) return;
-    this.pulses.push({ t, a: st === "idle" ? .55 : st === "ended" ? .3 : 1 });
-    const amp = STATES[st].amp * (st === "error" ? .6 + Math.random() * .8 : 1);
+    this.pulses.push({ t, a: st === "ended" ? .3 : 1 });
+    const amp = STATES[st].amp;
     if (amp > 0) this.ecgEvents.push({ t, kind: "qrs", amp });
   }
 
@@ -309,9 +267,6 @@ class Vis {
         if (dt > -0.03 && dt < 0.25) err = true;
       } else if (e.kind === "flutter" && dt > 0 && dt < .35) y += .3 * Math.sin(dt * 70) * Math.exp(-dt * 9);
     }
-    const st = this.state;
-    if (st === "thinking") y += .09 * Math.sin(tc * 2 * Math.PI * 7.5) + .05 * Math.sin(tc * 2 * Math.PI * 12.3);
-    else if (st === "idle") y += .035 * Math.sin(tc * 2 * Math.PI * 1.3);
     return [y, err];
   }
 
@@ -321,16 +276,8 @@ class Vis {
     if (!this.nextBeat) this.nextBeat = t + Math.random() * .5;
     if (t >= this.nextBeat) this.beat(t);
     const st = STATES[this.state];
-    let target = st.heart;
-    const p = this.pct;
-    const reddish = this.state === "working" || this.state === "thinking" || this.state === "idle";
-    if (p != null && reddish) {
-      if (p > 90) target = [255, 70, 30];
-      else if (p > 75) target = mix(target, [150, 20, 32], .5);
-      else if (p > 50) target = mix(target, [170, 28, 40], .3);
-    }
-    this.color = mix(this.color, target, Math.min(1, dt * 3));
-    this.glow = lerp(this.glow, st.glow + (p > 90 ? .35 : 0), Math.min(1, dt * 3));
+    this.color = mix(this.color, st.heart, Math.min(1, dt * 3));
+    this.glow = lerp(this.glow, st.glow, Math.min(1, dt * 3));
     this.flash = Math.max(0, this.flash - dt * 1.2);
     this.pulses = this.pulses.filter(q => t - q.t < .8);
     this.ecgEvents = this.ecgEvents.filter(e => t - ECG_DELAY - e.t < .8);
@@ -382,12 +329,7 @@ class Vis {
     const compact = document.body.classList.contains("compact");
     const base = compact ? 12 : 23;
     const [scale, v] = this.heartScale(t);
-    const p = this.pct;
-    let cx = w / 2, cy = h / 2 + 1;
-    if (p != null && p > 75 && v > .05) {                       // strain tremble
-      const k = (p > 90 ? 2.0 : 1.1) * Math.min(1, v);
-      cx += (Math.random() - .5) * 2 * k; cy += (Math.random() - .5) * 2 * k;
-    }
+    const cx = w / 2, cy = h / 2 + 1;
     let col = this.color;
     if (this.flash > 0) col = mix(col, [255, 255, 255], this.flash * (Math.sin(t * 40) > 0 ? .5 : .1));
 
@@ -403,9 +345,8 @@ class Vis {
 
     ctx.scale(scale, scale);
     heartPath(ctx, base);
-    const hot = p != null && p > 90 && this.state !== "blocked";
-    ctx.shadowColor = rgb(hot ? [255, 120, 50] : col, .85);
-    ctx.shadowBlur = Math.min(compact ? 9 : 19, (compact ? 4 : 8) + (compact ? 5 : 11) * this.glow * (.55 + v) + (hot ? 4 * (1 + Math.sin(t * 7)) : 0));
+    ctx.shadowColor = rgb(col, .85);
+    ctx.shadowBlur = Math.min(compact ? 9 : 19, (compact ? 4 : 8) + (compact ? 5 : 11) * this.glow * (.55 + v));
     const grad = ctx.createRadialGradient(-base * .35, -base * .45, base * .1, 0, 0, base * 1.2);
     grad.addColorStop(0, rgb(mix(col, [255, 255, 255], .45)));
     grad.addColorStop(.45, rgb(col));
@@ -414,20 +355,6 @@ class Vis {
     ctx.fill();
     ctx.shadowBlur = 0;
 
-    if (p != null && p > 75 && !compact) {                     // veins
-      ctx.save();
-      heartPath(ctx, base); ctx.clip();
-      ctx.strokeStyle = p > 90 ? "rgba(90,10,0,.55)" : "rgba(70,0,12,.6)";
-      ctx.lineWidth = 1.1; ctx.lineCap = "round";
-      const b = base;
-      const vein = (pts) => { ctx.beginPath(); ctx.moveTo(pts[0], pts[1]); ctx.bezierCurveTo(...pts.slice(2)); ctx.stroke(); };
-      vein([0, -b * .5, -b * .1, -b * .2, -b * .35, -b * .05, -b * .42, b * .3]);
-      vein([-b * .22, -b * .12, -b * .45, -b * .2, -b * .62, -b * .3, -b * .75, -b * .5]);
-      vein([0, -b * .5, b * .15, -b * .15, b * .32, b * .05, b * .3, b * .45]);
-      vein([b * .22, -b * .02, b * .45, -b * .1, b * .6, -b * .05, b * .78, -b * .35]);
-      vein([-b * .38, b * .12, -b * .2, b * .3, -b * .1, b * .4, b * .02, b * .62]);
-      ctx.restore();
-    }
     // specular highlight
     ctx.beginPath();
     ctx.ellipse(-base * .45, -base * .45, base * .22, base * .12, -0.7, 0, Math.PI * 2);

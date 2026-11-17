@@ -16,9 +16,6 @@ DEFAULTS = {
     "ntfy": {"enabled": False, "server": "https://ntfy.sh", "topic": ""},
     "notify_blocked_after_seconds": 30,
     "notify_done_if_session_ran_minutes": 2,
-    "thinking_silence_seconds": 5,
-    "context_window_tokens": 200000,
-    "context_window_overrides": {},
     "window": {"x": None, "y": None, "opacity": 0.95},
 }
 

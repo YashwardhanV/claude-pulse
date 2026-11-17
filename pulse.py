@@ -7,6 +7,7 @@
     python pulse.py ntfy-test        send a test phone notification
     python pulse.py status | stop
     python pulse.py off | on         switch Pulse off completely / back on
+    python pulse.py statusline       context usage for Claude Code's status line (stdin JSON)
     python pulse.py ensure-running   (SessionStart hook; reads the hook JSON on stdin)
 """
 import argparse
@@ -84,7 +85,6 @@ def _run_window_or_wait(app, port, cfg, headless, title=None, remember=True, sec
 def cmd_serve(args):
     from pulse import config as config_mod
     from pulse import launcher
-    from pulse.transcript import TranscriptWatcher
 
     log = _setup_logging(console=sys.stderr is not None)
     cfg = config_mod.load()
@@ -107,7 +107,6 @@ def cmd_serve(args):
     replayed = app.ingest_spool()
     if replayed:
         log.info("replayed %d spooled event(s)", replayed)
-    TranscriptWatcher(app.registry).start()
     try:
         # Blocks until the window is closed (× only hides it). Closing it for real, e.g.
         # Alt+F4, stops the server; the next SessionStart hook starts a fresh one.
@@ -163,7 +162,8 @@ def cmd_install(args):
     from pulse import config as config_mod
     from pulse import installer
     cfg = config_mod.load()
-    ok = installer.install(int(cfg.get("port", 7777)), pip=not args.no_pip)
+    ok = installer.install(int(cfg.get("port", 7777)), pip=not args.no_pip,
+                           statusline=not args.no_statusline)
     print("Config:   %s" % config_mod.CONFIG_PATH)
     return 0 if ok else 1
 
@@ -236,6 +236,12 @@ def cmd_stop(args):
     return 0
 
 
+def cmd_statusline(args):
+    # Runs on every status line refresh: import only what it needs, never touch the config.
+    from pulse import statusline
+    return statusline.main()
+
+
 def cmd_off(args):
     """Switch Pulse off completely: take the hooks out (so tool calls pay no hook cost and
     nothing can relaunch it) and stop the server. Config and history stay; `on` undoes it."""
@@ -269,16 +275,19 @@ def main(argv=None):
     sub.add_parser("ensure-running", help="SessionStart hook: start the server if needed")
     i = sub.add_parser("install", help="merge hooks into ~/.claude/settings.json")
     i.add_argument("--no-pip", action="store_true")
+    i.add_argument("--no-statusline", action="store_true", help="don't add the context-usage status line")
     sub.add_parser("uninstall", help="remove our hooks")
     sub.add_parser("ntfy-test", help="send a test notification")
     sub.add_parser("status")
     sub.add_parser("stop")
     sub.add_parser("off", help="remove the hooks and stop the server (undo with `on`)")
     sub.add_parser("on", help="put the hooks back")
+    sub.add_parser("statusline", help="status line command (reads Claude Code's JSON on stdin)")
     args = p.parse_args(argv)
     handler = {"serve": cmd_serve, "demo": cmd_demo, "ensure-running": cmd_ensure_running,
                "install": cmd_install, "uninstall": cmd_uninstall, "ntfy-test": cmd_ntfy_test,
-               "status": cmd_status, "stop": cmd_stop, "off": cmd_off, "on": cmd_on}[args.cmd]
+               "status": cmd_status, "stop": cmd_stop, "off": cmd_off, "on": cmd_on,
+               "statusline": cmd_statusline}[args.cmd]
     return handler(args) or 0
 
 

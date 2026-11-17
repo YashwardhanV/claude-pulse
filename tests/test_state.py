@@ -17,10 +17,8 @@ class Clock:
 
 
 CFG = {
-    "thinking_silence_seconds": 5,
     "notify_blocked_after_seconds": 30,
     "notify_done_if_session_ran_minutes": 2,
-    "context_window_tokens": 200000,
 }
 
 
@@ -52,7 +50,7 @@ def test_session_start_is_idle(env):
 
 def test_unknown_session_is_created_lazily(env):
     reg, *_ = env
-    reg.handle(ev("PreToolUse", sid="late", tool_name="Read", tool_input={"file_path": "/a/b.py"}))
+    reg.handle(ev("PostToolUse", sid="late", tool_name="Read", tool_input={"file_path": "/a/b.py"}))
     assert reg.state_of("late") == "working"
 
 
@@ -63,91 +61,18 @@ def test_payload_without_session_id_is_ignored(env):
     assert reg.sessions == {}
 
 
-def test_prompt_then_silence_becomes_thinking(env):
-    reg, clock, _, _ = env
-    reg.handle(ev("SessionStart"))
-    reg.handle(ev("UserPromptSubmit", prompt="secret prompt"))
-    assert reg.state_of("s1") == "working"
-    clock.advance(4.9)
-    reg.tick()
-    assert reg.state_of("s1") == "working"
-    clock.advance(0.2)
-    reg.tick()
-    assert reg.state_of("s1") == "thinking"
 
 
-def test_tool_events_keep_working_and_reset_silence(env):
-    reg, clock, emitted, _ = env
-    reg.handle(ev("UserPromptSubmit"))
-    for _ in range(3):
-        clock.advance(4)
-        reg.handle(ev("PreToolUse", tool_name="Edit", tool_input={"file_path": "C:\\x\\app.py", "old_string": "SECRET"}))
-        reg.tick()
-        assert reg.state_of("s1") == "working"
-    s = reg.get("s1")
-    assert s.last_action == "Edit app.py"
-    assert "SECRET" not in repr(reg.snapshot())
-    assert [p["label"] for p in pulses(emitted)] == ["Edit", "Edit", "Edit"]
-    clock.advance(5)
-    reg.tick()
-    assert reg.state_of("s1") == "thinking"
-    reg.handle(ev("PostToolUse", tool_name="Edit", tool_response={"filePath": "x"}))
-    assert reg.state_of("s1") == "working"
 
 
-def test_thinking_timeout_is_configurable(env):
-    reg, clock, _, _ = env
-    reg.cfg["thinking_silence_seconds"] = 2
-    reg.handle(ev("UserPromptSubmit"))
-    clock.advance(2.1)
-    reg.tick()
-    assert reg.state_of("s1") == "thinking"
 
 
-def test_transcript_thinking_confirmation(env):
-    reg, clock, _, _ = env
-    reg.handle(ev("UserPromptSubmit"))
-    reg.transcript_thinking("s1")
-    assert reg.state_of("s1") == "thinking"
-    reg.handle(ev("Stop"))
-    reg.transcript_thinking("s1")          # never overrides done
-    assert reg.state_of("s1") == "done"
 
 
-def test_failure_event_is_error_then_reverts_after_6s(env):
-    reg, clock, emitted, _ = env
-    reg.handle(ev("UserPromptSubmit"))
-    reg.handle(ev("PreToolUse", tool_name="Bash", tool_input={"command": "npm test"}))
-    reg.handle(ev("PostToolUseFailure", tool_name="Bash", error="Exit code 1\nboom"))
-    assert reg.state_of("s1") == "error"
-    assert any(p["kind"] == "error" for p in pulses(emitted))
-    clock.advance(3)
-    reg.handle(ev("PreToolUse", tool_name="Read", tool_input={"file_path": "a.py"}))
-    assert reg.state_of("s1") == "error"   # overlay holds for the full 6s
-    clock.advance(3.1)
-    reg.tick()
-    assert reg.state_of("s1") == "working"
 
 
-def test_error_reverts_to_done_if_stop_arrived_meanwhile(env):
-    reg, clock, _, _ = env
-    reg.handle(ev("UserPromptSubmit"))
-    reg.handle(ev("PostToolUseFailure", tool_name="Bash", error="Exit code 2"))
-    reg.handle(ev("Stop"))
-    assert reg.state_of("s1") == "error"
-    clock.advance(6)
-    reg.tick()
-    assert reg.state_of("s1") == "done"
 
 
-def test_post_tool_use_error_detection(env):
-    reg, clock, _, _ = env
-    reg.handle(ev("PostToolUse", tool_name="Bash", tool_response={"stdout": "", "exitCode": 1}))
-    assert reg.state_of("s1") == "error"
-    clock.advance(7)
-    reg.tick()
-    reg.handle(ev("PostToolUse", tool_name="Bash", tool_response={"stdout": "ok", "stderr": "warn"}))
-    assert reg.state_of("s1") == "working"
 
 
 def test_interrupt_is_not_an_error(env):
@@ -164,7 +89,7 @@ def test_blocked_by_notification_then_resumes(env):
     reg.handle(ev("Notification", notification_type="permission_prompt", message="needs permission"))
     assert reg.state_of("s1") == "blocked"
     snap = reg.snapshot()["sessions"][0]
-    assert snap["status"] == "blocked · permission needed"
+    assert snap["status"] == "needs you · permission needed"
     clock.advance(10)
     reg.handle(ev("PostToolUse", tool_name="Bash", tool_response={}))
     assert reg.state_of("s1") == "working"
@@ -173,7 +98,7 @@ def test_blocked_by_notification_then_resumes(env):
     assert notified == []                 # answered quickly: no phone ping
 
 
-def test_blocked_beats_error_and_silence(env):
+def test_blocked_beats_error_and_time(env):
     reg, clock, _, _ = env
     reg.handle(ev("UserPromptSubmit"))
     reg.handle(ev("PostToolUseFailure", tool_name="Bash", error="Exit code 1"))
@@ -182,7 +107,7 @@ def test_blocked_beats_error_and_silence(env):
     clock.advance(20)
     reg.tick()
     assert reg.state_of("s1") == "blocked"
-    assert reg.snapshot()["sessions"][0]["status"] == "blocked · permission for Bash"
+    assert reg.snapshot()["sessions"][0]["status"] == "needs you · permission for Bash"
 
 
 def test_permission_prompt_keeps_better_reason(env):
@@ -256,43 +181,12 @@ def test_subagent_stop_flutters_without_state_change(env):
     assert pulses(emitted)[-1]["kind"] == "flutter"
 
 
-def test_precompact_breath_and_context_reset(env):
-    reg, _, emitted, _ = env
-    reg.handle(ev("UserPromptSubmit"))
-    reg.set_context("s1", 190000)
-    assert reg.get("s1").context_pct == 95.0
-    reg.handle(ev("PreCompact", trigger="auto"))
-    assert reg.get("s1").context_pct is None
-    assert pulses(emitted)[-1]["kind"] == "breath"
-    reg.set_context("s1", 30000)
-    assert reg.get("s1").context_pct == 15.0
 
 
-def test_context_above_window_assumes_1m(env):
-    reg, *_ = env
-    reg.handle(ev("SessionStart"))
-    reg.set_context("s1", 515000)
-    s = reg.get("s1")
-    assert s.context_window == 1_000_000 and s.context_pct == 51.5
 
 
-def test_window_is_learned_per_model(env):
-    reg, _, emitted, _ = env
-    reg.handle(ev("SessionStart", sid="big"))
-    reg.handle(ev("SessionStart", sid="new"))
-    reg.set_context("big", 250000, model="claude-x")
-    assert ("learn_window", ("claude-x", 1_000_000)) in emitted
-    reg.set_context("new", 190000, model="claude-x")      # below 200k, but same model
-    assert reg.get("new").context_pct == 19.0
-    reg.set_context("new", 190000, model="claude-other")
-    assert reg.get("new").context_pct == 95.0
 
 
-def test_1m_model_id_sets_window(env):
-    reg, *_ = env
-    reg.handle(ev("SessionStart", model="claude-opus-5-5[1m]"))
-    reg.set_context("s1", 190000)
-    assert reg.get("s1").context_pct == 19.0
 
 
 def test_session_end_then_removed_after_10s(env):
@@ -364,7 +258,7 @@ def test_multi_session_titles_and_blocked_first(env):
 def test_event_log_is_capped_at_15(env):
     reg, *_ = env
     for i in range(30):
-        reg.handle(ev("PreToolUse", tool_name="Read", tool_input={"file_path": "f%d.py" % i}))
+        reg.handle(ev("PostToolUse", tool_name="Read", tool_input={"file_path": "f%d.py" % i}))
     events = reg.snapshot()["sessions"][0]["events"]
     assert len(events) == 15 and events[-1][1] == "Read f29.py"
 
@@ -417,3 +311,126 @@ def test_active_ids_excludes_ended_sessions(env):
     reg.handle(ev("SessionStart", sid="b"))
     reg.handle(ev("SessionEnd", sid="b"))
     assert reg.active_ids() == {"a"}
+
+
+# ---- three visible states -------------------------------------------------------------
+def test_prompt_stays_working_until_stop(env):
+    reg, clock, _, _ = env
+    reg.handle(ev("UserPromptSubmit", prompt="secret prompt"))
+    clock.advance(60)                      # no "thinking" state any more: silence is still work
+    reg.tick()
+    assert reg.state_of("s1") == "working"
+    reg.handle(ev("Stop"))
+    assert reg.state_of("s1") == "done"
+
+
+def test_tool_results_drive_spikes_and_status(env):
+    reg, clock, emitted, _ = env
+    reg.handle(ev("UserPromptSubmit"))
+    for _ in range(3):
+        clock.advance(4)
+        reg.handle(ev("PostToolUse", tool_name="Edit",
+                      tool_input={"file_path": "C:\\x\\app.py", "old_string": "SECRET"}, tool_response={}))
+    s = reg.get("s1")
+    assert reg.state_of("s1") == "working" and s.last_action == "Edit app.py" and s.tool_count == 3
+    assert "SECRET" not in repr(reg.snapshot())
+    assert [p["label"] for p in pulses(emitted)] == ["Edit", "Edit", "Edit"]
+
+
+def test_ordinary_pretooluse_is_not_a_spike(env):
+    """Old installs still send PreToolUse for every tool: no double spikes."""
+    reg, _, emitted, _ = env
+    reg.handle(ev("PreToolUse", tool_name="Read", tool_input={"file_path": "a.py"}))
+    assert reg.state_of("s1") == "working" and pulses(emitted) == []
+
+
+def test_failure_is_a_red_spike_not_a_state(env):
+    reg, _, emitted, _ = env
+    reg.handle(ev("UserPromptSubmit"))
+    reg.handle(ev("PostToolUseFailure", tool_name="Bash", tool_input={"command": "npm test"},
+                  error="Exit code 1\nboom"))
+    assert reg.state_of("s1") == "working"
+    assert reg.get("s1").last_action == "Bash failed"
+    assert pulses(emitted)[-1]["kind"] == "error"
+
+
+def test_post_tool_use_error_detection(env):
+    reg, *_ = env
+    reg.handle(ev("PostToolUse", tool_name="Bash", tool_response={"stdout": "", "exitCode": 1}))
+    assert reg.get("s1").last_action == "Bash failed"
+
+
+def test_snapshot_shows_only_working_needs_you_done(env):
+    reg, *_ = env
+    reg.handle(ev("SessionStart", sid="a"))
+    reg.handle(ev("UserPromptSubmit", sid="b"))
+    reg.handle(ev("PermissionRequest", sid="c", tool_name="Bash"))
+    snap = {x["id"]: x for x in reg.snapshot()["sessions"]}
+    assert (snap["a"]["state"], snap["a"]["badge"]) == ("done", "ready")
+    assert (snap["b"]["state"], snap["b"]["badge"]) == ("working", "working")
+    assert (snap["c"]["state"], snap["c"]["badge"]) == ("blocked", "needs you")
+
+
+def test_precompact_breath(env):
+    reg, _, emitted, _ = env
+    reg.handle(ev("UserPromptSubmit"))
+    reg.handle(ev("PreCompact", trigger="auto"))
+    assert pulses(emitted)[-1]["kind"] == "breath"
+    assert reg.get("s1").last_action == "compacting context"
+
+
+# ---- async tool hooks: a late result must not undo done / needs you -------------------
+def test_late_tool_result_after_stop_keeps_done(env):
+    reg, clock, emitted, _ = env
+    reg.handle(ev("UserPromptSubmit"))
+    reg.handle(ev("Stop"))
+    clock.advance(0.2)
+    reg.handle(ev("PostToolUse", tool_name="Read", tool_input={"file_path": "a.py"}, tool_response={}))
+    assert reg.state_of("s1") == "done"
+    assert pulses(emitted)[-1]["label"] == "Read"          # still drawn on the ECG
+    assert reg.get("s1").events[-1][1] == "Read a.py"
+
+
+def test_late_tool_result_after_permission_keeps_blocked(env):
+    reg, clock, _, _ = env
+    reg.handle(ev("UserPromptSubmit"))
+    reg.handle(ev("PermissionRequest", tool_name="Bash", tool_input={"command": "rm -rf build"}))
+    clock.advance(0.3)
+    reg.handle(ev("PostToolUse", tool_name="Read", tool_input={"file_path": "a.py"}, tool_response={}))
+    reg.handle(ev("PostToolUseFailure", tool_name="Grep", tool_input={"pattern": "x"}, error="boom"))
+    assert reg.state_of("s1") == "blocked"
+
+
+def test_approved_call_finishing_quickly_unblocks(env):
+    reg, clock, _, _ = env
+    reg.handle(ev("UserPromptSubmit"))
+    reg.handle(ev("PermissionRequest", tool_name="Bash", tool_input={"command": "rm -rf build"}))
+    clock.advance(1)                       # you approved within a second
+    reg.handle(ev("PostToolUse", tool_name="Bash", tool_input={"command": "rm -rf build"}, tool_response={}))
+    assert reg.state_of("s1") == "working"
+
+
+def test_answered_question_unblocks(env):
+    reg, clock, _, _ = env
+    q = {"questions": [{"question": "Which db?"}]}
+    reg.handle(ev("PreToolUse", tool_name="AskUserQuestion", tool_input=q))
+    assert reg.state_of("s1") == "blocked"
+    clock.advance(1)
+    reg.handle(ev("PostToolUse", tool_name="AskUserQuestion", tool_input=q, tool_response={}))
+    assert reg.state_of("s1") == "working"
+
+
+def test_tool_result_well_after_stop_counts_again(env):
+    reg, clock, _, _ = env
+    reg.handle(ev("UserPromptSubmit"))
+    reg.handle(ev("Stop"))
+    clock.advance(5)
+    reg.handle(ev("PostToolUse", tool_name="Read", tool_input={"file_path": "a.py"}, tool_response={}))
+    assert reg.state_of("s1") == "working"
+
+
+def test_windows_cwd_gives_project_name_on_any_os():
+    from pulse.state import project_name
+    assert project_name("C:\\code\\pagdandi\\") == "pagdandi"
+    assert project_name("/home/y/code/drivedex") == "drivedex"
+    assert project_name("") == "claude"

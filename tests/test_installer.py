@@ -14,6 +14,9 @@ from pulse import installer
 
 ROOT = Path(__file__).resolve().parent.parent
 GIT_BASH = r"C:\Program Files\Git\bin\bash.exe"
+# The shell Claude Code runs hooks in: Git Bash on Windows, sh/bash elsewhere.
+BASH = GIT_BASH if sys.platform == "win32" else shutil.which("bash")
+HAVE_BASH = bool(BASH) and os.path.exists(BASH)
 
 USER_SETTINGS = {
     "permissions": {"defaultMode": "auto"},
@@ -23,6 +26,22 @@ USER_SETTINGS = {
         "Stop": [{"hooks": [{"type": "command", "command": "say done"}]}],
     },
 }
+
+
+def kill(pid):
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True)
+    else:
+        import signal
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+
+
+def our_handlers(settings):
+    return {event: h for event, groups in settings["hooks"].items()
+            for g in groups for h in g["hooks"] if installer.MARKER in h["command"]}
 
 
 def free_port():
@@ -36,18 +55,48 @@ def free_port():
 def test_merge_adds_all_events_and_keeps_user_hooks():
     out = installer.merge(copy.deepcopy(USER_SETTINGS), 7777)
     assert out["permissions"] == {"defaultMode": "auto"} and out["model"] == "opus"
-    expected = {"SessionStart"} | {e for e, _ in installer.EVENTS}
+    expected = {"SessionStart"} | {e for e, _, _ in installer.EVENTS}
     assert expected <= set(out["hooks"])
     assert out["hooks"]["PreToolUse"][0] == USER_SETTINGS["hooks"]["PreToolUse"][0]
     assert out["hooks"]["Stop"][0] == USER_SETTINGS["hooks"]["Stop"][0]
     assert "matcher" not in out["hooks"]["Stop"][1]            # Stop has no matcher support
-    assert out["hooks"]["PreToolUse"][1]["matcher"] == "*"
+    # PreToolUse only for the tools that are a question to you, not every tool call
+    assert out["hooks"]["PreToolUse"][1]["matcher"] == "AskUserQuestion|ExitPlanMode"
+    assert out["statusLine"]["command"].endswith(installer.STATUSLINE_MARKER)
     for groups in out["hooks"].values():
         for g in groups:
             for h in g["hooks"]:
                 if installer.MARKER in h["command"]:
                     assert h["timeout"] == installer.HOOK_TIMEOUT
                     assert h["command"].rstrip().endswith("exit 0 " + installer.MARKER)
+
+
+def test_per_tool_hooks_are_async_and_turn_hooks_are_not():
+    h = our_handlers(installer.merge({}, 7777))
+    for event in ("PostToolUse", "PostToolUseFailure", "SubagentStop", "PreCompact"):
+        assert h[event].get("async") is True, event
+    for event in ("SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest",
+                  "Notification", "Stop", "SessionEnd"):
+        assert "async" not in h[event], event
+
+
+def test_existing_status_line_is_left_alone():
+    mine = {"statusLine": {"type": "command", "command": "~/.claude/my-line.sh"}}
+    out = installer.merge(copy.deepcopy(mine), 7777)
+    assert out["statusLine"] == mine["statusLine"]
+    stripped, _ = installer.strip(out)
+    assert stripped == mine
+
+
+def test_no_statusline_flag():
+    assert "statusLine" not in installer.merge({}, 7777, statusline=False)
+
+
+def test_curl_command_per_platform():
+    win = installer.curl_command(7777, windows=True)
+    nix = installer.curl_command(7777, windows=False)
+    assert win.startswith("curl.exe ") and "-o NUL " in win
+    assert nix.startswith("curl ") and "-o /dev/null " in nix
 
 
 def test_merge_is_idempotent():
@@ -66,7 +115,7 @@ def test_strip_restores_original_exactly():
     merged = installer.merge(copy.deepcopy(USER_SETTINGS), 7777)
     stripped, removed = installer.strip(merged)
     assert stripped == USER_SETTINGS
-    assert removed == len(installer.EVENTS) + 1
+    assert removed == len(installer.EVENTS) + 2          # + SessionStart + status line
 
 
 def test_strip_keeps_foreign_handlers_in_shared_group():
@@ -81,7 +130,7 @@ def test_strip_keeps_foreign_handlers_in_shared_group():
 def test_strip_on_empty_settings():
     assert installer.strip({}) == ({}, 0)
     out, removed = installer.strip(installer.merge({}, 7777))
-    assert out == {} and removed == len(installer.EVENTS) + 1
+    assert out == {} and removed == len(installer.EVENTS) + 2
 
 
 def test_install_and_uninstall_on_file(tmp_path):
@@ -105,8 +154,8 @@ def test_install_refuses_invalid_json(tmp_path):
 
 
 # ---- the real hook command must exit 0, quickly, even with no server ----------------------
-PAYLOAD = json.dumps({"hook_event_name": "PreToolUse", "session_id": "x", "tool_name": "Bash",
-                      "tool_input": {"command": "ls"}}).encode()
+PAYLOAD = json.dumps({"hook_event_name": "PostToolUse", "session_id": "x", "tool_name": "Bash",
+                      "tool_input": {"command": "ls"}, "tool_response": {}}).encode()
 
 
 def run_hook(shell_argv, command):
@@ -115,21 +164,21 @@ def run_hook(shell_argv, command):
     return r, time.time() - start
 
 
-@pytest.mark.skipif(not os.path.exists(GIT_BASH), reason="Git Bash not installed")
-def test_hook_command_server_down_git_bash():
-    r, took = run_hook([GIT_BASH, "-c"], installer.curl_command(free_port()))
+@pytest.mark.skipif(not HAVE_BASH, reason="bash / Git Bash not installed")
+def test_hook_command_server_down_bash():
+    r, took = run_hook([BASH, "-c"], installer.curl_command(free_port()))
     assert r.returncode == 0 and r.stdout == b""
     assert took < 3.0          # bounded by curl -m 1 plus shell startup
 
 
-@pytest.mark.skipif(not shutil.which("powershell"), reason="PowerShell not available")
+@pytest.mark.skipif(sys.platform != "win32" or not shutil.which("powershell"), reason="Windows PowerShell only")
 def test_hook_command_server_down_powershell():
     r, took = run_hook(["powershell", "-NoProfile", "-Command"], installer.curl_command(free_port()))
     assert r.returncode == 0 and r.stdout.strip() == b""
     assert took < 6.0          # PowerShell startup dominates (slow on CI)
 
 
-@pytest.mark.skipif(not os.path.exists(GIT_BASH), reason="Git Bash not installed")
+@pytest.mark.skipif(not HAVE_BASH, reason="bash / Git Bash not installed")
 def test_hook_command_against_live_server(tmp_path):
     from pulse.server import Hub, PulseApp
     from pulse.state import Registry
@@ -137,7 +186,7 @@ def test_hook_command_against_live_server(tmp_path):
     app.registry = Registry({}, emit=app.emit)
     port = app.start(port=0)
     try:
-        r, took = run_hook([GIT_BASH, "-c"], installer.curl_command(port))
+        r, took = run_hook([BASH, "-c"], installer.curl_command(port))
         assert r.returncode == 0 and r.stdout == b""
         for _ in range(50):
             if app.registry.get("x"):
@@ -188,4 +237,13 @@ def test_ensure_running_starts_detached_server_and_replays_spool(tmp_path):
         assert launcher.health(port)["pid"] == pid
     finally:
         if pid:
-            subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True)
+            kill(pid)
+
+
+def test_backups_in_the_same_second_do_not_overwrite(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text("{}", encoding="utf-8")
+    a = installer.backup(path)
+    path.write_text('{"x": 1}', encoding="utf-8")
+    b = installer.backup(path)
+    assert a != b and a.read_text() == "{}" and b.read_text() == '{"x": 1}'

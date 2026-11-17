@@ -13,20 +13,27 @@ from .launcher import PULSE_PY
 MARKER = "# claude-pulse"
 SETTINGS_PATH = Path(os.environ.get("CLAUDE_SETTINGS_PATH", Path.home() / ".claude" / "settings.json"))
 
-# Events that take a matcher get "*"; UserPromptSubmit and Stop ignore matchers, so none.
+# (event, matcher, async). matcher None = the event takes no matcher (UserPromptSubmit, Stop).
+#
+# Hook cost: a synchronous hook makes Claude wait while a shell starts (~0.13 s on Windows).
+# Per-tool events are the hot path, so they run async and Claude never waits for them.
+# PreToolUse is only needed for the two tools that are themselves a question to you; the
+# tool spike comes from PostToolUse. The remaining events fire about once per turn and stay
+# synchronous so "done" and "needs you" arrive in order (state.py drops a late async tool event).
 EVENTS = [
-    ("UserPromptSubmit", False),
-    ("PreToolUse", True),
-    ("PostToolUse", True),
-    ("PostToolUseFailure", True),
-    ("PermissionRequest", True),
-    ("Notification", True),
-    ("Stop", False),
-    ("SubagentStop", True),
-    ("PreCompact", True),
-    ("SessionEnd", True),
+    ("UserPromptSubmit", None, False),
+    ("PreToolUse", "AskUserQuestion|ExitPlanMode", False),
+    ("PostToolUse", "*", True),
+    ("PostToolUseFailure", "*", True),
+    ("PermissionRequest", "*", False),
+    ("Notification", "*", False),
+    ("Stop", None, False),
+    ("SubagentStop", "*", True),
+    ("PreCompact", "*", True),
+    ("SessionEnd", "*", False),
 ]
 HOOK_TIMEOUT = 5
+STATUSLINE_MARKER = "pulse.py statusline"
 
 
 def git_bash_available():
@@ -51,24 +58,39 @@ def _arg(path):
     return '"%s"' % p if " " in p else p
 
 
-def curl_command(port):
-    return ('curl.exe -s -m 1 --connect-timeout 0.3 -o NUL -H "Content-Type: application/json" '
-            '--data-binary "@-" http://127.0.0.1:%d/event ; exit 0 %s' % (int(port), MARKER))
+def curl_command(port, windows=None):
+    """`curl.exe` on Windows (in PowerShell 5.1 `curl` is Invoke-WebRequest), `curl` elsewhere."""
+    windows = sys.platform == "win32" if windows is None else windows
+    exe, null = ("curl.exe", "NUL") if windows else ("curl", "/dev/null")
+    return ('%s -s -m 1 --connect-timeout 0.3 -o %s -H "Content-Type: application/json" '
+            '--data-binary "@-" http://127.0.0.1:%d/event ; exit 0 %s' % (exe, null, int(port), MARKER))
 
 
 def ensure_command():
     return "%s %s ensure-running ; exit 0 %s" % (_exe(sys.executable), _arg(PULSE_PY), MARKER)
 
 
+def statusline_command():
+    return "%s %s statusline" % (_exe(sys.executable), _arg(PULSE_PY))
+
+
 def our_hooks(port):
     hooks = {"SessionStart": [{"matcher": "*", "hooks": [
         {"type": "command", "command": ensure_command(), "timeout": HOOK_TIMEOUT}]}]}
-    for event, has_matcher in EVENTS:
-        group = {"hooks": [{"type": "command", "command": curl_command(port), "timeout": HOOK_TIMEOUT}]}
-        if has_matcher:
-            group = {"matcher": "*", **group}
+    for event, matcher, run_async in EVENTS:
+        handler = {"type": "command", "command": curl_command(port), "timeout": HOOK_TIMEOUT}
+        if run_async:
+            handler["async"] = True
+        group = {"hooks": [handler]}
+        if matcher:
+            group = {"matcher": matcher, **group}
         hooks[event] = [group]
     return hooks
+
+
+def _statusline_is_ours(settings):
+    sl = settings.get("statusLine")
+    return isinstance(sl, dict) and STATUSLINE_MARKER in str(sl.get("command", ""))
 
 
 def _is_ours(handler):
@@ -103,16 +125,22 @@ def strip(settings):
             del hooks[event]
     if not hooks:
         del out["hooks"]
+    if _statusline_is_ours(out):
+        del out["statusLine"]
+        removed += 1
     return out, removed
 
 
-def merge(settings, port):
-    """Add our hooks without touching anything else. Idempotent."""
+def merge(settings, port, statusline=True):
+    """Add our hooks (and our status line, unless you already have one) without touching
+    anything else. Idempotent."""
     out, _ = strip(settings)
     hooks = out.setdefault("hooks", {})
     for event, groups in our_hooks(port).items():
         hooks.setdefault(event, [])
         hooks[event].extend(groups)
+    if statusline and "statusLine" not in out:
+        out["statusLine"] = {"type": "command", "command": statusline_command()}
     return out
 
 
@@ -128,7 +156,12 @@ def backup(path=None):
     path = Path(path or SETTINGS_PATH)
     if not path.exists():
         return None
-    dest = path.with_name("settings.json.bak-%s" % time.strftime("%Y%m%d-%H%M%S"))
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dest = path.with_name("settings.json.bak-%s" % stamp)
+    n = 1
+    while dest.exists():         # two runs in the same second must not overwrite a backup
+        n += 1
+        dest = path.with_name("settings.json.bak-%s-%d" % (stamp, n))
     shutil.copy2(path, dest)
     return dest
 
@@ -141,7 +174,7 @@ def write_settings(settings, path=None):
     os.replace(tmp, path)
 
 
-def install(port, path=None, pip=True, out=print):
+def install(port, path=None, pip=True, statusline=True, out=print):
     path = Path(path or SETTINGS_PATH)
     try:
         before = load_settings(path)
@@ -149,17 +182,22 @@ def install(port, path=None, pip=True, out=print):
         out("ERROR: %s is not valid JSON (%s). Nothing was changed." % (path, e))
         return False
     bak = backup(path)
-    after = merge(before, port)
+    after = merge(before, port, statusline=statusline)
     _, had = strip(before)
     write_settings(after, path)
     out("Settings: %s" % path)
     if bak:
         out("Backup:   %s" % bak)
-    events = ["SessionStart"] + [e for e, _ in EVENTS]
+    events = ["SessionStart"] + [e for e, _, _ in EVENTS]
     verb = "Updated" if had else "Added"
     out("%s Claude Pulse hooks for: %s" % (verb, ", ".join(events)))
     out("  hook command:  %s" % curl_command(port))
     out("  auto-start:    %s" % ensure_command())
+    if _statusline_is_ours(after):
+        out("  status line:   %s  (context window usage)" % statusline_command())
+    elif statusline and "statusLine" in before:
+        out("  status line:   you already have one, so it was left alone. To show Pulse's context")
+        out("                 gauge instead, set statusLine.command to: %s" % statusline_command())
     out("Everything else in settings.json was left as it was.")
     if pip:
         out("Installing Python dependencies (pywebview)...")
@@ -184,7 +222,8 @@ def uninstall(path=None, out=print):
         return True
     bak = backup(path)
     write_settings(after, path)
-    out("Removed %d Claude Pulse hook(s) from %s" % (removed, path))
+    out("Removed %d Claude Pulse entr%s (hooks and status line) from %s"
+        % (removed, "y" if removed == 1 else "ies", path))
     if bak:
         out("Backup: %s" % bak)
     out("Restart Claude Code for this to take effect. The server (if running) can be stopped with:")
