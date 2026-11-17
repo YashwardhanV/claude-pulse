@@ -39,6 +39,8 @@ class WindowController:
         self.start_hidden = start_hidden   # real server: stay hidden until a session is live
         self.hidden = start_hidden
         self.active_fn = None    # set by the server; lets the shown event re-hide an idle window
+        self.active_ids_fn = None  # set by the server; ids of live sessions, used for muting
+        self.muted = set()       # sessions dismissed with x: they no longer bring the window back
         self._height = 240
         self._save_timer = None
         self._hwnd = None
@@ -76,9 +78,10 @@ class WindowController:
         return -WIDTH < x < self.screen[0] + 4000 and -50 < y < self.screen[1] + 2000
 
     def _on_shown(self):
-        if self.active_fn and self.active_fn() <= 0:
-            self.sync(0)         # the OS shows the window after load, even if created hidden
-            return
+        if self.active_fn:
+            self.sync(self.active_fn())   # the OS shows the window after load, even if created hidden
+            if self.hidden:
+                return
         threading.Timer(0.3, lambda: self._set_alpha(self._opacity())).start()
         if sys.platform == "win32":
             threading.Thread(target=self._hover_loop, name="hover", daemon=True).start()
@@ -113,13 +116,22 @@ class WindowController:
         self.window.resize(WIDTH, h)
 
     def hide(self):
+        """The x button. Mutes every session that is live right now: their events no longer
+        bring the window back. A new session shows it again; muted ones are forgotten once
+        they end."""
+        if self.active_ids_fn:
+            self.muted |= set(self.active_ids_fn())
         if self.window and not self.hidden:
             self.hidden = True
             self.window.hide()
 
     def sync(self, active, from_event=False):
-        """Show the widget only while a session is live. An event from a live session
-        re-shows it (even after the x); zero live sessions always hides it."""
+        """Show the widget only while an un-muted session is live. Zero live sessions always
+        hides it; an event from an un-muted live session shows it."""
+        if self.active_ids_fn:
+            live = set(self.active_ids_fn())
+            self.muted &= live               # ended sessions don't stay muted forever
+            active = len(live - self.muted)
         if active <= 0:
             if self.window:      # forced: the flag can disagree with reality at startup
                 self.hidden = True

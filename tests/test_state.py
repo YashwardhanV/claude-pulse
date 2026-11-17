@@ -409,3 +409,11 @@ def test_active_count_drops_to_zero_when_sessions_end(env):
     reg.handle(ev("SessionEnd", sid="a"))
     reg.handle(ev("SessionEnd", sid="b"))
     assert reg.active_count() == 0
+
+
+def test_active_ids_excludes_ended_sessions(env):
+    reg, clock, _, _ = env
+    reg.handle(ev("SessionStart", sid="a"))
+    reg.handle(ev("SessionStart", sid="b"))
+    reg.handle(ev("SessionEnd", sid="b"))
+    assert reg.active_ids() == {"a"}

@@ -76,7 +76,9 @@ Extras:
 * **Click a card** to see its last 15 events with timestamps. Click again to collapse it.
 * **Drag** the window by the top bar or a card header. The position is remembered.
 * **Hover** over the window to make it see-through.
-* **×** hides the window. It comes back on the next hook event, and the server keeps running.
+* **×** mutes every session that is live right now: their events no longer bring the window back,
+  for as long as those sessions run. A *new* session shows it again. The server keeps running, and
+  phone notifications still arrive.
 * With **more than 4 sessions** the cards switch to compact mode: small hearts, no ECG.
 
 ## Commands
@@ -88,7 +90,9 @@ Extras:
 | `python pulse.py uninstall` | Removes only Claude Pulse's hooks (with a backup). |
 | `python pulse.py ntfy-test` | Sends a test phone notification and prints how to subscribe. |
 | `python pulse.py status` | Shows whether the server is running, how many hooks are installed, and where the config and log are. |
-| `python pulse.py stop` | Stops the background server. |
+| `python pulse.py stop` | Stops the background server (the next session start brings it back). |
+| `python pulse.py off` | Switches Pulse off completely: removes the hooks (so tool calls pay no hook cost and nothing relaunches it) and stops the server. Config is kept. |
+| `python pulse.py on` | Puts the hooks back (no pip). The window appears at the next session start. |
 | `python pulse.py serve [--headless]` | Runs the server and window in the foreground. You don't normally need this. |
 | `python pulse.py ensure-running` | What the `SessionStart` hook runs. It starts the server if needed and forwards the hook payload. |
 
@@ -122,6 +126,7 @@ The `SessionStart` hook runs `pulse.py ensure-running`, which:
 
 The listening port is the real single-instance lock. `~/.claude-pulse/pulse.pid` records the PID.
 Closing the window for real (Alt+F4) stops the server, and the next session start brings it back.
+To stop that, use `python pulse.py off` or set `"autostart": false`.
 
 ## Phone notifications (ntfy)
 
@@ -150,6 +155,7 @@ Created on first run:
 
 | Key | Default | Meaning |
 |---|---|---|
+| `autostart` | `true` | `false`: hooks never launch the server. Start it yourself with `python pulse.py serve` when you want it. |
 | `port` | `7777` | Local port, bound to 127.0.0.1 only. If you change it, re-run `install` so the hooks use the new port. |
 | `ntfy.enabled` | `false` | Send phone notifications. |
 | `ntfy.server` | `https://ntfy.sh` | ntfy server. |
@@ -174,7 +180,7 @@ Config changes take effect when the server restarts (`python pulse.py stop`).
   * Try `python pulse.py serve` in a terminal to see errors. If pywebview can't start, it falls
     back to headless mode, and you can open `http://127.0.0.1:7777/` in a browser.
   * pywebview on Windows needs the WebView2 runtime.
-  * If you pressed ×, the window comes back on the next Claude event.
+  * If you pressed ×, those sessions are muted; the window comes back with the next new session.
   * If the window ended up off-screen, set `window.x`/`window.y` to `null` in the config.
 * **Hooks not firing.** Restart Claude Code, because hooks load at session start. Then run `/hooks`
   inside Claude Code and look for the `# claude-pulse` entries, and run `python pulse.py status`.
@@ -183,7 +189,9 @@ Config changes take effect when the server restarts (`python pulse.py stop`).
   and a `test` card should appear.
 * **Pressure looks wrong.** See "Context window size" under known limitations. Set
   `context_window_overrides` for your model.
-* **Uninstall everything:** `python pulse.py uninstall`, `python pulse.py stop`, then delete
+* **It keeps coming back and I want a break:** `python pulse.py off` (undo with `on`), or set
+  `"autostart": false` to keep the hooks but only run Pulse when you start it.
+* **Uninstall everything:** `python pulse.py off`, then delete
   `~/.claude-pulse/`.
 
 ## Known limitations and design decisions

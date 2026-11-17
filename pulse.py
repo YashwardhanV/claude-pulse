@@ -6,6 +6,7 @@
     python pulse.py uninstall        remove only our hooks
     python pulse.py ntfy-test        send a test phone notification
     python pulse.py status | stop
+    python pulse.py off | on         switch Pulse off completely / back on
     python pulse.py ensure-running   (SessionStart hook; reads the hook JSON on stdin)
 """
 import argparse
@@ -56,6 +57,7 @@ def _run_window_or_wait(app, port, cfg, headless, title=None, remember=True, sec
             on_start = None
             if idle_hide:    # only show the widget while a Claude Code session is live
                 ctl.active_fn = app.registry.active_count
+                ctl.active_ids_fn = app.registry.active_ids
                 app.on_event = lambda: ctl.sync(app.registry.active_count(), from_event=True)
                 app.on_state = lambda: ctl.sync(app.registry.active_count())
                 on_start = lambda: ctl.sync(app.registry.active_count(), from_event=True)
@@ -234,6 +236,25 @@ def cmd_stop(args):
     return 0
 
 
+def cmd_off(args):
+    """Switch Pulse off completely: take the hooks out (so tool calls pay no hook cost and
+    nothing can relaunch it) and stop the server. Config and history stay; `on` undoes it."""
+    from pulse import installer
+    ok = installer.uninstall()
+    cmd_stop(args)
+    print("Claude Pulse is off. Sessions already running keep their old hooks until restarted.")
+    print("Turn it back on with:  python pulse.py on")
+    return 0 if ok else 1
+
+
+def cmd_on(args):
+    """Put the hooks back (no pip). The window appears at the next Claude Code session."""
+    from pulse import config as config_mod
+    from pulse import installer
+    cfg = config_mod.load()
+    return 0 if installer.install(int(cfg.get("port", 7777)), pip=False) else 1
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="pulse.py", description="Claude Pulse - heartbeat monitor for Claude Code")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -252,10 +273,12 @@ def main(argv=None):
     sub.add_parser("ntfy-test", help="send a test notification")
     sub.add_parser("status")
     sub.add_parser("stop")
+    sub.add_parser("off", help="remove the hooks and stop the server (undo with `on`)")
+    sub.add_parser("on", help="put the hooks back")
     args = p.parse_args(argv)
     handler = {"serve": cmd_serve, "demo": cmd_demo, "ensure-running": cmd_ensure_running,
                "install": cmd_install, "uninstall": cmd_uninstall, "ntfy-test": cmd_ntfy_test,
-               "status": cmd_status, "stop": cmd_stop}[args.cmd]
+               "status": cmd_status, "stop": cmd_stop, "off": cmd_off, "on": cmd_on}[args.cmd]
     return handler(args) or 0
 
 

@@ -126,6 +126,8 @@ def ensure_running(body=b""):
     up = port_open(port)     # probe once: a refused connect on Windows is not instant
     if up and body and post_event(port, body, check=False):
         return "forwarded"
+    if not up and not cfg.get("autostart", True):
+        return "autostart off"   # nothing is spooled either: no surprise replay later
     if body:
         spool(body)          # the server replays this when it comes up
     if up:

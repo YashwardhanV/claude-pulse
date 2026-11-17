@@ -333,6 +333,11 @@ class Registry:
         with self.lock:
             return sum(1 for s in self.sessions.values() if s.base != ENDED)
 
+    def active_ids(self):
+        """Ids of the sessions that are still live (not ended)."""
+        with self.lock:
+            return {sid for sid, s in self.sessions.items() if s.base != ENDED}
+
     def get(self, sid):
         return self.sessions.get(sid)
 

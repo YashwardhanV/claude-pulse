@@ -12,6 +12,7 @@ CONFIG_PATH = HOME_DIR / "config.json"
 
 DEFAULTS = {
     "port": 7777,
+    "autostart": True,   # false: hooks never launch the server; start it with `pulse.py serve`
     "ntfy": {"enabled": False, "server": "https://ntfy.sh", "topic": ""},
     "notify_blocked_after_seconds": 30,
     "notify_done_if_session_ran_minutes": 2,
